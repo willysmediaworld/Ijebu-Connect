@@ -1,0 +1,7 @@
+ijebu_connect.db
+.env
+venv/
+env/
+__pycache__/
+*.pyc
+.DS_Store
