@@ -13,7 +13,7 @@ except ImportError:
 
 from flask import (
     Flask, render_template_string, request, jsonify,
-    g, session, redirect, url_for
+    g, session, redirect, url_for, Response
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
@@ -27,7 +27,6 @@ PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '').strip()
 ALLOW_TEST_PAYMENTS = os.environ.get('ALLOW_TEST_PAYMENTS', 'True').lower() == 'true'
 CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', 'willysmediaworld@gmail.com')
 
-# Your Official Bank Account Details for CPN Manual Transfers
 BANK_INFO = {
     "bank_name": "OPay",
     "account_number": "09018363715",
@@ -37,7 +36,7 @@ BANK_INFO = {
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or 'ijebu_connect_secret_key_2026_secured'
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB max limit (Supports Videos)
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB max limit
 
 # Static Upload Setup
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
@@ -96,7 +95,6 @@ def init_db():
         is_postgres = bool(DATABASE_URL)
         pk_type = "SERIAL PRIMARY KEY" if is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
 
-        # USERS TABLE
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS users (
                 id {pk_type},
@@ -129,7 +127,6 @@ def init_db():
         safe_add_column(cursor, 'users', 'cover_url', "TEXT DEFAULT ''")
         safe_add_column(cursor, 'users', 'is_dating_active', 'INTEGER DEFAULT 0')
 
-        # PRODUCTS / MARKETPLACE / SERVICES / JOBS TABLE
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS products (
                 id {pk_type},
@@ -151,7 +148,6 @@ def init_db():
         safe_add_column(cursor, 'products', 'video_url', "TEXT DEFAULT ''")
         safe_add_column(cursor, 'products', 'listing_type', "TEXT DEFAULT 'Market'")
 
-        # POSTS / EVENTS TABLE
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS posts (
                 id {pk_type},
@@ -277,7 +273,50 @@ with app.app_context():
 
 
 # =============================================================================
-# FILE & MEDIA UPLOADER (PHOTO & VIDEO)
+# SEO & SEARCH ENGINE INDEXING (ROBOTS.TXT & SITEMAP.XML)
+# =============================================================================
+
+@app.route('/robots.txt')
+def robots_txt():
+    content = """User-agent: *
+Allow: /
+Disallow: /admin
+Disallow: /api/
+
+Sitemap: {}sitemap.xml
+""".format(request.host_url)
+    return Response(content, mimetype='text/plain')
+
+@app.route('/sitemap.xml')
+def sitemap_xml():
+    db = get_db()
+    cursor = db.cursor()
+    
+    base_url = request.host_url.rstrip('/')
+    urls = [
+        f"{base_url}/",
+        f"{base_url}/auth"
+    ]
+    
+    # Add active listings to sitemap for Google indexing
+    try:
+        cursor.execute("SELECT id FROM products WHERE status = 'active' ORDER BY id DESC LIMIT 500")
+        for row in cursor.fetchall():
+            urls.append(f"{base_url}/?product={row['id']}")
+    except Exception:
+        pass
+
+    xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n'
+    xml_content += '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+    for u in urls:
+        xml_content += f'  <url><loc>{u}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>\n'
+    xml_content += '</urlset>'
+    
+    return Response(xml_content, mimetype='application/xml')
+
+
+# =============================================================================
+# FILE & MEDIA UPLOADER
 # =============================================================================
 
 @app.route('/api/upload', methods=['POST'])
@@ -488,40 +527,6 @@ def claim_bank_transfer():
     return jsonify({'success': True, 'message': 'Payment claim submitted! Admin will verify and activate your CPN Partner status.'})
 
 
-@app.route('/api/cpn/upgrade', methods=['POST'])
-def upgrade_to_cpn():
-    if 'user_id' not in session:
-        return jsonify({'success': False, 'message': 'Login required.'}), 401
-
-    db = get_db()
-    cursor = db.cursor()
-    p = query_param()
-    uid = session['user_id']
-
-    if PAYSTACK_SECRET_KEY:
-        cursor.execute(f"SELECT username FROM users WHERE id = {p}", (uid,))
-        user = cursor.fetchone()
-        headers = {
-            "Authorization": f"Bearer {PAYSTACK_SECRET_KEY}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "email": f"{user['username']}@ijebuconnect.com",
-            "amount": 2000 * 100,
-            "callback_url": f"{request.host_url}api/cpn/verify-payment",
-            "metadata": {"user_id": uid}
-        }
-        try:
-            res = requests.post("https://api.paystack.co/transaction/initialize", json=payload, headers=headers)
-            res_data = res.json()
-            if res_data.get('status'):
-                return jsonify({'success': True, 'paystack': True, 'redirect_url': res_data['data']['authorization_url']})
-        except Exception as e:
-            return jsonify({'success': False, 'message': str(e)}), 500
-
-    return jsonify({'success': False, 'message': 'Paystack key not configured. Please use Direct Bank Transfer option.'})
-
-
 @app.route('/api/cpn/withdraw', methods=['POST'])
 def request_payout():
     if 'user_id' not in session:
@@ -685,7 +690,6 @@ def get_dating_matches():
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 
-# UPDATE FB-STYLE PROFILE
 @app.route('/api/users/profile/update', methods=['POST'])
 def update_user_profile_media():
     if 'user_id' not in session:
@@ -1005,7 +1009,7 @@ def block_user(username):
 
 
 # =============================================================================
-# ADMIN API (WITH MEMBER DELETION & PARTNER APPROVALS)
+# ADMIN API
 # =============================================================================
 
 @app.route('/api/admin/overview', methods=['GET'])
@@ -1070,7 +1074,7 @@ def admin_partner_requests():
     if request.method == 'POST':
         data = request.json or {}
         req_id = data.get('request_id')
-        action = data.get('action') # 'approve' or 'reject'
+        action = data.get('action')
 
         cursor.execute(f"SELECT user_id FROM partner_requests WHERE id = {p}", (req_id,))
         req = cursor.fetchone()
@@ -1142,6 +1146,14 @@ INDEX_TEMPLATE = r"""
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Ijebu Connect - Connect. Discover. Trade. Belong.</title>
+
+<!-- SEO OpenGraph Preview Tags for Social Sharing -->
+<meta name="description" content="The all-in-one social marketplace, dating, beauty, jobs, and events platform for Ijebu. Connect, trade, and belong today!">
+<meta property="og:title" content="Ijebu Connect Network">
+<meta property="og:description" content="Connect. Discover. Trade. Belong. Join Ijebu's official digital community!">
+<meta property="og:image" content="/static/logo.png">
+<meta property="og:type" content="website">
+
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
@@ -1208,7 +1220,8 @@ INDEX_TEMPLATE = r"""
 	.product-card:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
 	.product-img-box { width: 76px; height: 76px; border-radius: 12px; background: #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: #0f172a; flex-shrink: 0; overflow: hidden; }
     .product-img-box img, .product-img-box video { width: 100%; height: 100%; object-fit: cover; }
-	.btn-whatsapp { background: #25d366; color: #fff; border: none; padding: 8px 14px; border-radius: 10px; font-weight: 700; font-size: 0.8rem; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+	.btn-whatsapp { background: #25d366; color: #fff; border: none; padding: 8px 12px; border-radius: 10px; font-weight: 700; font-size: 0.78rem; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; }
+    .btn-share { background: #3b82f6; color: #fff; border: none; padding: 8px 12px; border-radius: 10px; font-weight: 700; font-size: 0.78rem; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
 
 	/* FACEBOOK-STYLE PROFILE */
 	.fb-profile-card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 18px; overflow: hidden; margin-bottom: 1rem; position: relative; }
@@ -1555,6 +1568,35 @@ function formatNaira(val) {
     return '₦' + parseFloat(val || 0).toLocaleString('en-US', { minimumFractionDigits: 2 });
 }
 
+// SOCIAL SHARE UTILITY FUNCTION
+function shareListing(title, text, url) {
+    const fullUrl = url || window.location.href;
+    const shareData = {
+        title: title || 'Ijebu Connect Network',
+        text: text || 'Check this out on Ijebu Connect!',
+        url: fullUrl
+    };
+
+    if (navigator.share) {
+        navigator.share(shareData).catch(() => {});
+    } else {
+        // Fallback for Desktop Browsers
+        const encodedUrl = encodeURIComponent(fullUrl);
+        const encodedText = encodeURIComponent(`${title}: ${text}`);
+        
+        const whatsappUrl = `https://api.whatsapp.com/send?text=${encodedText}%20${encodedUrl}`;
+        const facebookUrl = `https://www.facebook.com/sharer/sharer.php?u=${encodedUrl}`;
+        
+        const option = prompt('Share via:\n1. WhatsApp\n2. Facebook\n3. Copy Link\n(Type 1, 2, or 3):', '1');
+        if (option === '1') window.open(whatsappUrl, '_blank');
+        else if (option === '2') window.open(facebookUrl, '_blank');
+        else if (option === '3') {
+            navigator.clipboard.writeText(fullUrl);
+            showToast('Link copied to clipboard!');
+        }
+    }
+}
+
 function switchNav(target) {
     document.querySelectorAll('.nav-pill').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.view-section').forEach(v => v.classList.remove('active'));
@@ -1689,6 +1731,7 @@ function renderPostCard(p) {
             ${mediaHtml}
             <div class="post-actions">
                 <button class="post-action ${p.liked_by_me ? 'liked':''}" onclick="toggleLike(${p.id})">❤️ ${p.likes_count}</button>
+                <button class="post-action" onclick="shareListing('Post by ${p.full_name}', '${p.content.substring(0, 50)}...')"><i class="fa-solid fa-share-nodes"></i> Share</button>
             </div>
         </div>
     `;
@@ -1725,7 +1768,10 @@ async function loadCategoryListings(listingType, containerId) {
                     <div style="font-weight:800;color:var(--emerald-green);font-size:0.9rem;margin:2px 0;">${p.price > 0 ? formatNaira(p.price) : 'Negotiable'}</div>
                     <div style="font-size:0.75rem;color:var(--text-muted);">${p.category} • By <span class="clickable-user" onclick="openProfile('${p.seller_username}')">@${p.seller_username}</span></div>
                 </div>
-                <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" class="btn-whatsapp"><i class="fa-brands fa-whatsapp"></i> Chat</a>
+                <div style="display:flex;flex-direction:column;gap:5px;">
+                    <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" class="btn-whatsapp"><i class="fa-brands fa-whatsapp"></i> Chat</a>
+                    <button class="btn-share" onclick="shareListing('${p.title}', 'Check out ${p.title} on Ijebu ${listingType}!')"><i class="fa-solid fa-share-nodes"></i> Share</button>
+                </div>
             </div>
         `;
     }).join('');
@@ -1919,7 +1965,7 @@ async function openProfile(username) {
 
     const editProfileBtn = isSelf ? `
         <button onclick="openEditProfileModal()" style="background:var(--navy-blue);color:#fff;border:none;padding:8px 14px;border-radius:10px;font-weight:700;font-size:0.8rem;cursor:pointer;margin-top:8px;">
-            ✏️ Edit FB Cover &amp; Avatar
+            ✏️ Edit Cover &amp; Avatar Photo
         </button>
     ` : '';
 
