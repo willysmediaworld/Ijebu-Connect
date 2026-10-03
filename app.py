@@ -198,24 +198,39 @@ def init_db():
 
         db.commit()
 
-        # Admin Seed
-        admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect')
-        admin_password = os.environ.get('ADMIN_SEED_PASSWORD', 'CHANGE_ME_IN_ENV_NOW')
+        # =====================================================================
+        # ADMIN SEED (Pre-configured Credentials)
+        # =====================================================================
+        admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect').lower()
+        admin_password = os.environ.get('ADMIN_SEED_PASSWORD', 'Rotimi1972connect')
         admin_phone    = os.environ.get('ADMIN_SEED_PHONE',    '09018363715')
         admin_name     = os.environ.get('ADMIN_SEED_NAME',     "Sir Ola'Rotimi")
         admin_ref      = os.environ.get('ADMIN_SEED_REF',      'CPN00001')
+
+        admin_pass_hash = generate_password_hash(admin_password)
 
         cursor.execute(
             f"SELECT id FROM users WHERE username = {p} OR phone = {p} OR referral_code = {p}",
             (admin_username, admin_phone, admin_ref)
         )
-        if not cursor.fetchone():
-            admin_pass_hash = generate_password_hash(admin_password)
+        existing_admin = cursor.fetchone()
+
+        if not existing_admin:
             try:
                 cursor.execute(f'''
                     INSERT INTO users (full_name, phone, username, password_hash, user_type, referral_code)
                     VALUES ({p}, {p}, {p}, {p}, 'Admin', {p})
                 ''', (admin_name, admin_phone, admin_username, admin_pass_hash, admin_ref))
+                db.commit()
+            except Exception:
+                db.rollback()
+        else:
+            try:
+                cursor.execute(f'''
+                    UPDATE users 
+                    SET password_hash = {p}, user_type = 'Admin' 
+                    WHERE id = {p}
+                ''', (admin_pass_hash, existing_admin['id']))
                 db.commit()
             except Exception:
                 db.rollback()
@@ -843,7 +858,6 @@ def chat_thread(username):
         if _is_blocked(cursor, p, uid, other_id) or _is_blocked(cursor, p, other_id, uid):
             return jsonify({'success': False, 'message': 'Cannot send message.'}), 403
 
-        # Soft daily rate-limit (200/day per sender)
         if DATABASE_URL:
             cursor.execute(
                 f"SELECT COUNT(*) FROM messages WHERE sender_id = {p} AND created_at > NOW() - INTERVAL '1 day'",
@@ -865,7 +879,6 @@ def chat_thread(username):
         db.commit()
         return jsonify({'success': True, 'message': 'Sent.'})
 
-    # GET — mark as read, return thread
     cursor.execute(
         f"UPDATE messages SET is_read = 1 WHERE sender_id = {p} AND receiver_id = {p}",
         (other_id, uid)
@@ -998,56 +1011,56 @@ INDEX_TEMPLATE = r"""
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
-:root {
-    --navy-blue: #0b1e36;
-    --emerald-green: #059669;
-    --amber-gold: #d97706;
-    --bg-body: #f8fafc;
-    --text-dark: #0f172a;
-    --text-muted: #64748b;
-    --border-light: #cbd5e1;
-}
-* { box-sizing: border-box; margin:0; padding:0; font-family:'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color:transparent; }
-body { background: var(--bg-body); color: var(--text-dark); display: flex; flex-direction: column; min-height: 100vh; }
-
-#toast-container { position: fixed; top: 16px; right: 16px; z-index: 9999; }
-.toast { background: var(--navy-blue); color: #fff; padding: 12px 18px; border-radius: 10px; margin-bottom: 8px; box-shadow: 0 8px 20px rgba(0,0,0,.15); font-size: 0.88rem; font-weight: 600; }
-.toast.success { background: var(--emerald-green); } .toast.error { background: #ef4444; }
-
-header { background: #fff; padding: 0.85rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid var(--border-light); position: sticky; top:0; z-index: 100; }
-.brand-box { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.brand-title { font-size: 1.05rem; font-weight: 800; color: var(--navy-blue); line-height:1.1; }
-.brand-title span { color: var(--emerald-green); }
-
-.header-auth { display: flex; align-items: center; gap: 6px; }
-.btn-header-login { background: var(--navy-blue); color: #fff; text-decoration: none; padding: 7px 14px; border-radius: 20px; font-weight: 700; font-size: 0.78rem; }
-.header-user-pill { background: #f1f5f9; color: var(--navy-blue); padding: 6px 10px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; cursor: pointer; border: none; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.header-logout-btn { background: #ef4444; color: #fff; border: none; padding: 6px 10px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; cursor: pointer; }
-
-.top-nav-pills { display: flex; gap: 6px; padding: 0.85rem 1rem 0.2rem; max-width: 600px; margin: 0 auto; width: 100%; flex-wrap: wrap; }
-.nav-pill { padding: 9px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 700; background: #fff; border: 1.5px solid var(--border-light); color: var(--text-muted); cursor: pointer; flex: 1; min-width: 0; text-align: center; position: relative; }
-.nav-pill.active { background: var(--navy-blue); color: #fff; border-color: var(--navy-blue); }
-
-.app-container { max-width: 600px; margin: 0 auto; width: 100%; padding: 0.5rem 1rem 2rem; flex: 1; }
-.view-section { display: none; } .view-section.active { display: block; }
-
-.card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 16px; padding: 1.25rem; margin-bottom: 0.85rem; }
-.form-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 0.85rem; }
-.form-group label { font-size: 0.82rem; font-weight: 700; color: var(--text-dark); }
-.form-control { padding: 11px 12px; border-radius: 10px; border: 1.5px solid var(--border-light); font-size: 0.9rem; outline: none; width: 100%; background: #fff; font-family: inherit; }
-.btn-submit { background: var(--emerald-green); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.9rem; cursor: pointer; width: 100%; }
-
-.badge { padding: 3px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: 800; display: inline-block; }
-.badge-partner { background: #fef3c7; color: #92400e; } .badge-admin { background: #fee2e2; color: #991b1b; }
-
-.clickable-user { cursor: pointer; font-weight: 800; color: var(--navy-blue); }
-.clickable-user:hover { color: var(--emerald-green); text-decoration: underline; }
-
-.feed-post { background: #fff; border: 1.5px solid var(--border-light); border-radius: 16px; padding: 1rem; margin-bottom: 0.85rem; }
-.post-header { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 8px; }
-.avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 0.9rem; flex-shrink: 0; cursor: pointer; }
-.post-author { font-size: 0.92rem; }
-.post-meta { font-size: 0.72rem; color: var(--text-muted); }
+	:root {
+	    --navy-blue: #0b1e36;
+	    --emerald-green: #059669;
+	    --amber-gold: #d97706;
+	    --bg-body: #f8fafc;
+	    --text-dark: #0f172a;
+	    --text-muted: #64748b;
+	    --border-light: #cbd5e1;
+	}
+	* { box-sizing: border-box; margin:0; padding:0; font-family:'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color:transparent; }
+	body { background: var(--bg-body); color: var(--text-dark); display: flex; flex-direction: column; min-height: 100vh; }
+	
+	#toast-container { position: fixed; top: 16px; right: 16px; z-index: 9999; }
+	.toast { background: var(--navy-blue); color: #fff; padding: 12px 18px; border-radius: 10px; margin-bottom: 8px; box-shadow: 0 8px 20px rgba(0,0,0,.15); font-size: 0.88rem; font-weight: 600; }
+	.toast.success { background: var(--emerald-green); } .toast.error { background: #ef4444; }
+	
+	header { background: #fff; padding: 0.85rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid var(--border-light); position: sticky; top:0; z-index: 100; }
+	.brand-box { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+	.brand-title { font-size: 1.05rem; font-weight: 800; color: var(--navy-blue); line-height:1.1; }
+	.brand-title span { color: var(--emerald-green); }
+	
+	.header-auth { display: flex; align-items: center; gap: 6px; }
+	.btn-header-login { background: var(--navy-blue); color: #fff; text-decoration: none; padding: 7px 14px; border-radius: 20px; font-weight: 700; font-size: 0.78rem; }
+	.header-user-pill { background: #f1f5f9; color: var(--navy-blue); padding: 6px 10px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; cursor: pointer; border: none; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.header-logout-btn { background: #ef4444; color: #fff; border: none; padding: 6px 10px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; cursor: pointer; }
+	
+	.top-nav-pills { display: flex; gap: 6px; padding: 0.85rem 1rem 0.2rem; max-width: 600px; margin: 0 auto; width: 100%; flex-wrap: wrap; }
+	.nav-pill { padding: 9px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 700; background: #fff; border: 1.5px solid var(--border-light); color: var(--text-muted); cursor: pointer; flex: 1; min-width: 0; text-align: center; position: relative; }
+	.nav-pill.active { background: var(--navy-blue); color: #fff; border-color: var(--navy-blue); }
+	
+	.app-container { max-width: 600px; margin: 0 auto; width: 100%; padding: 0.5rem 1rem 2rem; flex: 1; }
+	.view-section { display: none; } .view-section.active { display: block; }
+	
+	.card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 16px; padding: 1.25rem; margin-bottom: 0.85rem; }
+	.form-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 0.85rem; }
+	.form-group label { font-size: 0.82rem; font-weight: 700; color: var(--text-dark); }
+	.form-control { padding: 11px 12px; border-radius: 10px; border: 1.5px solid var(--border-light); font-size: 0.9rem; outline: none; width: 100%; background: #fff; font-family: inherit; }
+	.btn-submit { background: var(--emerald-green); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.9rem; cursor: pointer; width: 100%; }
+	
+	.badge { padding: 3px 8px; border-radius: 6px; font-size: 0.7rem; font-weight: 800; display: inline-block; }
+	.badge-partner { background: #fef3c7; color: #92400e; } .badge-admin { background: #fee2e2; color: #991b1b; }
+	
+	.clickable-user { cursor: pointer; font-weight: 800; color: var(--navy-blue); }
+	.clickable-user:hover { color: var(--emerald-green); text-decoration: underline; }
+	
+	.feed-post { background: #fff; border: 1.5px solid var(--border-light); border-radius: 16px; padding: 1rem; margin-bottom: 0.85rem; }
+	.post-header { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 8px; }
+	.avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 0.9rem; flex-shrink: 0; cursor: pointer; }
+	.post-author { font-size: 0.92rem; }
+	.post-meta { font-size: 0.72rem; color: var(--text-muted); }
 .post-content { font-size: 0.92rem; line-height: 1.5; white-space: pre-wrap; margin-bottom: 8px; }
 .post-actions { display: flex; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border-light); }
 .post-action { flex: 1; background: none; border: none; padding: 8px; border-radius: 8px; font-size: 0.82rem; font-weight: 700; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
@@ -1502,7 +1515,6 @@ async function openProfile(username) {
             <div class="profile-name">${u.full_name}</div>
             <div style="font-size:0.85rem;opacity:0.8;">@${u.username} • ${u.user_type}</div>
         </div>
-
         ${messageBtn}
         ${cpnWalletBlock}
 
@@ -1687,21 +1699,28 @@ AUTH_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Auth | Ijebu Connect</title>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Auth - Ijebu Connect</title>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
-    body { font-family:'Plus Jakarta Sans',sans-serif; background:#f8fafc; display:flex; justify-content:center; align-items:center; min-height:100vh; padding:20px; margin:0; }
-    .auth-card { background:#fff; border:1.5px solid #cbd5e1; padding:24px; border-radius:18px; max-width:400px; width:100%; box-shadow:0 8px 30px rgba(0,0,0,0.06); }
-    .brand { font-size:1.3rem; font-weight:800; color:#0b1e36; text-align:center; margin-bottom:1rem; }
-    .brand span { color:#059669; }
-    .auth-tabs { display:flex; gap:6px; margin-bottom:1rem; }
-    .auth-tab { flex:1; padding:10px; border-radius:10px; border:1.5px solid #cbd5e1; background:#f8fafc; font-weight:700; cursor:pointer; font-size:0.82rem; }
-    .auth-tab.active { background:#0b1e36; color:#fff; border-color:#0b1e36; }
-    .form-group { display:flex; flex-direction:column; gap:5px; margin-bottom:12px; }
-    .form-group label { font-size:0.8rem; font-weight:700; color:#0f172a; }
-    .form-control { padding:10px 12px; border-radius:10px; border:1.5px solid #cbd5e1; font-size:0.88rem; outline:none; font-family:inherit; }
-    .btn-submit { background:#059669; color:#fff; border:none; padding:12px; border-radius:10px; font-weight:800; cursor:pointer; width:100%; margin-top:6px; }
+    :root {
+        --navy-blue: #0b1e36;
+        --emerald-green: #059669;
+        --border-light: #cbd5e1;
+    }
+    * { box-sizing: border-box; margin:0; padding:0; font-family:'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color:transparent; }
+    body { background: #f8fafc; color: #0f172a; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 1rem; }
+    .auth-card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 18px; padding: 1.75rem; max-width: 420px; width: 100%; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
+    .brand { text-align: center; font-size: 1.25rem; font-weight: 800; color: var(--navy-blue); margin-bottom: 1.25rem; }
+    .brand span { color: var(--emerald-green); }
+    .auth-tabs { display: flex; gap: 6px; margin-bottom: 1.25rem; background: #f1f5f9; padding: 4px; border-radius: 12px; }
+    .auth-tab { flex: 1; padding: 9px; border-radius: 8px; border: none; background: transparent; font-weight: 700; font-size: 0.85rem; color: #64748b; cursor: pointer; }
+    .auth-tab.active { background: #fff; color: var(--navy-blue); box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
+    .form-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 0.9rem; }
+    .form-group label { font-size: 0.82rem; font-weight: 700; color: #0f172a; }
+    .form-control { padding: 11px 12px; border-radius: 10px; border: 1.5px solid var(--border-light); font-size: 0.9rem; outline: none; width: 100%; background: #fff; font-family: inherit; }
+    .btn-submit { background: var(--emerald-green); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.9rem; cursor: pointer; width: 100%; margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -1815,110 +1834,104 @@ ADMIN_TEMPLATE = r"""
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin Panel — Ijebu Connect</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin Dashboard - Ijebu Connect</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
-    body { font-family:'Plus Jakarta Sans',sans-serif; background:#f8fafc; color:#0f172a; padding:20px; margin:0; }
-    .container { max-width:1000px; margin:0 auto; }
-    .card { background:#fff; border:1px solid #cbd5e1; border-radius:12px; padding:20px; margin-bottom:20px; }
-    table { width:100%; border-collapse:collapse; font-size:0.85rem; margin-top:10px; }
-    th, td { padding:10px; border-bottom:1px solid #cbd5e1; text-align:left; }
-    th { background:#f1f5f9; }
-    .btn { padding:6px 12px; border-radius:6px; border:none; font-weight:700; cursor:pointer; font-size:0.75rem; text-decoration:none; display:inline-block; }
-    .btn-green { background:#059669; color:#fff; } .btn-red { background:#ef4444; color:#fff; }
+    body { font-family:'Plus Jakarta Sans', sans-serif; background:#f8fafc; color:#0f172a; padding:1.5rem; max-width:800px; margin:0 auto; }
+    h1 { color:#0b1e36; margin-bottom:1rem; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:1rem; margin-bottom:1.5rem; }
+    .card { background:#fff; border:1.5px solid #cbd5e1; border-radius:14px; padding:1.25rem; }
+    .val { font-size:1.5rem; font-weight:800; color:#059669; }
+    .lbl { font-size:0.75rem; color:#64748b; font-weight:700; text-transform:uppercase; }
+    table { width:100%; border-collapse:collapse; background:#fff; border-radius:14px; overflow:hidden; border:1.5px solid #cbd5e1; font-size:0.85rem; }
+    th, td { padding:10px 12px; text-align:left; border-bottom:1px solid #cbd5e1; }
+    th { background:#0b1e36; color:#fff; }
+    .btn-act { padding:4px 10px; border-radius:6px; border:none; color:#fff; font-weight:700; cursor:pointer; font-size:0.75rem; }
+    .btn-app { background:#059669; } .btn-rej { background:#ef4444; }
 </style>
 </head>
 <body>
-<div class="container">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-        <h2>⚙️ Admin Control Panel</h2>
-        <a href="/" class="btn" style="background:#0b1e36;color:#fff;">← Return to App</a>
-    </div>
+<h1>⚙️ Admin Dashboard</h1>
+<a href="/" style="display:inline-block;margin-bottom:1rem;color:#0b1e36;font-weight:700;text-decoration:none;">← Back to App</a>
 
-    <div class="card" id="overview-box">Loading Overview...</div>
-
-    <div class="card">
-        <h3>Pending Cashouts</h3>
-        <div style="overflow-x:auto;">
-            <table>
-                <thead><tr><th>User</th><th>Amount</th><th>Bank Details</th><th>Action</th></tr></thead>
-                <tbody id="payouts-table"><tr><td colspan="4">Loading...</td></tr></tbody>
-            </table>
-        </div>
-    </div>
+<div class="grid">
+    <div class="card"><div class="val" id="st-users">0</div><div class="lbl">Total Users</div></div>
+    <div class="card"><div class="val" id="st-partners">0</div><div class="lbl">CPN Partners</div></div>
+    <div class="card"><div class="val" id="st-prods">0</div><div class="lbl">Products</div></div>
+    <div class="card"><div class="val" id="st-wallets">₦0.00</div><div class="lbl">User Balances</div></div>
 </div>
 
+<h3>Pending Bank Cashouts</h3>
+<table style="margin-top:0.5rem;">
+    <thead>
+        <tr><th>User</th><th>Amount</th><th>Bank</th><th>Acc Number</th><th>Acc Name</th><th>Action</th></tr>
+    </thead>
+    <tbody id="payouts-body"></tbody>
+</table>
+
 <script>
-async function loadDashboard() {
+async function loadAdmin() {
     const res = await fetch('/api/admin/overview');
     const data = await res.json();
-    if(!data.success) { alert('Admin login required.'); window.location.href = '/auth'; return; }
-
-    document.getElementById('overview-box').innerHTML = `
-        <p>Total Registered Users: <strong>${data.total_users}</strong></p>
-        <p>Official CPN Partners: <strong>${data.total_partners}</strong></p>
-        <p>Active Market Items: <strong>${data.total_products}</strong></p>
-        <p>Pending Cashouts: <strong>${data.pending_payouts}</strong></p>
-    `;
+    if(!data.success) { alert('Admin access denied.'); window.location.href='/'; return; }
+    document.getElementById('st-users').innerText = data.total_users;
+    document.getElementById('st-partners').innerText = data.total_partners;
+    document.getElementById('st-prods').innerText = data.total_products;
+    document.getElementById('st-wallets').innerText = '₦' + data.total_partner_wallets.toLocaleString();
     loadPayouts();
 }
-
 async function loadPayouts() {
     const res = await fetch('/api/admin/payouts');
     const payouts = await res.json();
-    const tbody = document.getElementById('payouts-table');
-    if(!payouts.length) {
-        tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#64748b;">No pending payouts.</td></tr>`;
-        return;
-    }
-    tbody.innerHTML = payouts.map(p => `
+    const body = document.getElementById('payouts-body');
+    if(!payouts.length) { body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#64748b;">No cashout requests.</td></tr>`; return; }
+    body.innerHTML = payouts.map(p => `
         <tr>
-            <td>${p.full_name} (@${p.username})</td>
-            <td><strong>₦${p.amount.toLocaleString()}</strong></td>
-            <td>${p.bank_name} - ${p.account_number} (${p.account_name})</td>
+            <td><b>${p.full_name}</b><br><small>@${p.username}</small></td>
+            <td><b>₦${p.amount.toLocaleString()}</b></td>
+            <td>${p.bank_name}</td>
+            <td>${p.account_number}</td>
+            <td>${p.account_name}</td>
             <td>
                 ${p.status === 'pending' ? `
-                    <button class="btn btn-green" onclick="processPayout(${p.id}, 'approved')">Approve</button>
-                    <button class="btn btn-red" onclick="processPayout(${p.id}, 'rejected')">Reject</button>
-                ` : `<strong>${p.status}</strong>`}
+                    <button class="btn-act btn-app" onclick="updatePayout(${p.id}, 'approved')">Approve</button>
+                    <button class="btn-act btn-rej" onclick="updatePayout(${p.id}, 'rejected')">Reject</button>
+                ` : `<b>${p.status.toUpperCase()}</b>`}
             </td>
         </tr>
     `).join('');
 }
-
-async function processPayout(pid, status) {
+async function updatePayout(id, status) {
     await fetch('/api/admin/payouts', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({payout_id: pid, status: status})
+        body: JSON.stringify({payout_id: id, status: status})
     });
-    loadDashboard();
+    loadPayouts();
 }
-
-window.onload = loadDashboard;
+loadAdmin();
 </script>
 </body>
 </html>
 """
 
-
 # =============================================================================
-# MAIN APP ROUTES
+# ROUTE HANDLERS
 # =============================================================================
 
 @app.route('/')
-def main_app():
+def index():
     return render_template_string(INDEX_TEMPLATE, contact_email=CONTACT_EMAIL)
 
 @app.route('/auth')
-def auth_app():
+def auth_page():
     return render_template_string(AUTH_TEMPLATE)
 
 @app.route('/admin')
-def admin_app():
+def admin_page():
     return render_template_string(ADMIN_TEMPLATE)
-
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
