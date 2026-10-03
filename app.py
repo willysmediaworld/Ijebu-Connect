@@ -27,15 +27,26 @@ PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '').strip()
 ALLOW_TEST_PAYMENTS = os.environ.get('ALLOW_TEST_PAYMENTS', 'True').lower() == 'true'
 CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', 'willysmediaworld@gmail.com')
 
+# Your Official Bank Account Details for CPN Manual Transfers
+BANK_INFO = {
+    "bank_name": "OPay",
+    "account_number": "09018363715",
+    "account_name": "Rotimi Williams Oladele",
+    "fee_naira": 2000
+}
+
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or 'ijebu_connect_secret_key_2026_secured'
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB max limit
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50 MB max limit (Supports Videos)
 
 # Static Upload Setup
 UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+ALLOWED_IMAGE_EXTS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+ALLOWED_VIDEO_EXTS = {'mp4', 'webm', 'mov', 'm4v', 'avi'}
+ALLOWED_EXTENSIONS = ALLOWED_IMAGE_EXTS.union(ALLOWED_VIDEO_EXTS)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -71,7 +82,6 @@ def generate_ref_code():
     return 'CPN' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
 
 def safe_add_column(cursor, table, column, col_type):
-    """Safely adds missing columns to existing tables for SQLite/Postgres."""
     try:
         cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
     except Exception:
@@ -86,7 +96,7 @@ def init_db():
         is_postgres = bool(DATABASE_URL)
         pk_type = "SERIAL PRIMARY KEY" if is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
 
-        # USERS TABLE (Supports Social, Market, Dating, Beauty, Jobs)
+        # USERS TABLE
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS users (
                 id {pk_type},
@@ -104,6 +114,8 @@ def init_db():
                 relationship_intent TEXT DEFAULT 'Networking',
                 bio TEXT DEFAULT '',
                 occupation TEXT DEFAULT '',
+                avatar_url TEXT DEFAULT '',
+                cover_url TEXT DEFAULT '',
                 is_dating_active INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
@@ -113,6 +125,8 @@ def init_db():
         safe_add_column(cursor, 'users', 'relationship_intent', "TEXT DEFAULT 'Networking'")
         safe_add_column(cursor, 'users', 'bio', "TEXT DEFAULT ''")
         safe_add_column(cursor, 'users', 'occupation', "TEXT DEFAULT ''")
+        safe_add_column(cursor, 'users', 'avatar_url', "TEXT DEFAULT ''")
+        safe_add_column(cursor, 'users', 'cover_url', "TEXT DEFAULT ''")
         safe_add_column(cursor, 'users', 'is_dating_active', 'INTEGER DEFAULT 0')
 
         # PRODUCTS / MARKETPLACE / SERVICES / JOBS TABLE
@@ -125,6 +139,7 @@ def init_db():
                 price REAL NOT NULL,
                 description TEXT,
                 image_url TEXT DEFAULT '',
+                video_url TEXT DEFAULT '',
                 location TEXT DEFAULT 'Ijebu Connect',
                 whatsapp_number TEXT NOT NULL,
                 listing_type TEXT DEFAULT 'Market',
@@ -133,6 +148,7 @@ def init_db():
             )
         ''')
         safe_add_column(cursor, 'products', 'image_url', "TEXT DEFAULT ''")
+        safe_add_column(cursor, 'products', 'video_url', "TEXT DEFAULT ''")
         safe_add_column(cursor, 'products', 'listing_type', "TEXT DEFAULT 'Market'")
 
         # POSTS / EVENTS TABLE
@@ -143,11 +159,13 @@ def init_db():
                 content TEXT NOT NULL,
                 post_type TEXT DEFAULT 'Social',
                 image_url TEXT DEFAULT '',
+                video_url TEXT DEFAULT '',
                 likes_count INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         safe_add_column(cursor, 'posts', 'image_url', "TEXT DEFAULT ''")
+        safe_add_column(cursor, 'posts', 'video_url', "TEXT DEFAULT ''")
         safe_add_column(cursor, 'posts', 'post_type', "TEXT DEFAULT 'Social'")
 
         cursor.execute(f'''
@@ -157,6 +175,18 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(post_id, user_id)
+            )
+        ''')
+
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS partner_requests (
+                id {pk_type},
+                user_id INTEGER NOT NULL,
+                amount REAL DEFAULT 2000.0,
+                payment_method TEXT DEFAULT 'Bank Transfer',
+                reference_note TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
@@ -207,9 +237,7 @@ def init_db():
 
         db.commit()
 
-        # =====================================================================
-        # ADMIN SEEDING (Configured Admin Account)
-        # =====================================================================
+        # ADMIN SEEDING
         admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect').lower()
         admin_password = os.environ.get('ADMIN_SEED_PASSWORD', 'Rotimi1972connect')
         admin_phone    = os.environ.get('ADMIN_SEED_PHONE',    '09018363715')
@@ -249,16 +277,16 @@ with app.app_context():
 
 
 # =============================================================================
-# FILE UPLOADER API
+# FILE & MEDIA UPLOADER (PHOTO & VIDEO)
 # =============================================================================
 
 @app.route('/api/upload', methods=['POST'])
-def upload_image():
+def upload_media():
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Login required.'}), 401
     
     if 'file' not in request.files:
-        return jsonify({'success': False, 'message': 'No image file submitted.'}), 400
+        return jsonify({'success': False, 'message': 'No file submitted.'}), 400
         
     file = request.files['file']
     if file.filename == '':
@@ -266,14 +294,15 @@ def upload_image():
         
     if file and allowed_file(file.filename):
         ext = file.filename.rsplit('.', 1)[1].lower()
-        filename = f"img_{session['user_id']}_{''.join(random.choices(string.ascii_lowercase + string.digits, k=10))}.{ext}"
+        is_video = ext in ALLOWED_VIDEO_EXTS
+        filename = f"{'vid' if is_video else 'img'}_{session['user_id']}_{''.join(random.choices(string.ascii_lowercase + string.digits, k=10))}.{ext}"
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         
-        url = f"/static/uploads/{filename}"
-        return jsonify({'success': True, 'image_url': url})
+        file_url = f"/static/uploads/{filename}"
+        return jsonify({'success': True, 'url': file_url, 'is_video': is_video})
         
-    return jsonify({'success': False, 'message': 'Allowed types: PNG, JPG, JPEG, GIF, WEBP'}), 400
+    return jsonify({'success': False, 'message': 'Unsupported file format.'}), 400
 
 
 # =============================================================================
@@ -415,7 +444,7 @@ def get_current_user():
         p = query_param()
         cursor.execute(
             f'''SELECT id, full_name, username, user_type, referral_code, wallet_balance, is_verified_merchant,
-                       age, gender, relationship_intent, bio, occupation, is_dating_active
+                       age, gender, relationship_intent, bio, occupation, avatar_url, cover_url, is_dating_active
                 FROM users WHERE id = {p}''',
             (session['user_id'],)
         )
@@ -438,6 +467,26 @@ def logout():
 # =============================================================================
 # CPN & PAYMENTS
 # =============================================================================
+
+@app.route('/api/cpn/claim-bank-transfer', methods=['POST'])
+def claim_bank_transfer():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    data = request.json or {}
+    note = data.get('reference_note', '').strip()
+    if not note:
+        return jsonify({'success': False, 'message': 'Please enter transfer sender name or reference note.'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    cursor.execute(
+        f"INSERT INTO partner_requests (user_id, amount, reference_note) VALUES ({p}, 2000.0, {p})",
+        (session['user_id'], note)
+    )
+    db.commit()
+    return jsonify({'success': True, 'message': 'Payment claim submitted! Admin will verify and activate your CPN Partner status.'})
+
 
 @app.route('/api/cpn/upgrade', methods=['POST'])
 def upgrade_to_cpn():
@@ -470,14 +519,7 @@ def upgrade_to_cpn():
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
 
-    if ALLOW_TEST_PAYMENTS:
-        cursor.execute(f"UPDATE users SET user_type = 'CPN Partner', is_verified_merchant = 1 WHERE id = {p}", (uid,))
-        db.commit()
-        process_cpn_commission(uid, upgrade_fee=2000.0)
-        session['user_type'] = 'CPN Partner'
-        return jsonify({'success': True, 'paystack': False, 'message': 'Congratulations! You are now an official CPN Partner!'})
-
-    return jsonify({'success': False, 'message': 'Payment gateway unavailable.'}), 400
+    return jsonify({'success': False, 'message': 'Paystack key not configured. Please use Direct Bank Transfer option.'})
 
 
 @app.route('/api/cpn/withdraw', methods=['POST'])
@@ -544,14 +586,14 @@ def handle_products():
         if not me or me['user_type'] not in ('CPN Partner', 'Admin'):
             return jsonify({
                 'success': False,
-                'message': 'You must be a CPN Partner to list on Ijebu Hub. Please upgrade first.',
+                'message': 'You must be a CPN Partner to list items/services. Upgrade to CPN Partner first.',
                 'requires_upgrade': True
             }), 403
 
         data = request.json or {}
         title = data.get('title', '').strip()
         category = data.get('category', 'General')
-        listing_type = data.get('listing_type', 'Market') # Market, Beauty, Jobs, Services
+        listing_type = data.get('listing_type', 'Market')
         try:
             price = float(data.get('price', 0))
         except (ValueError, TypeError):
@@ -559,14 +601,15 @@ def handle_products():
         description = data.get('description', '').strip()
         whatsapp = data.get('whatsapp_number', '').strip()
         image_url = data.get('image_url', '').strip()
+        video_url = data.get('video_url', '').strip()
 
         if not title or not whatsapp:
             return jsonify({'success': False, 'message': 'Title and WhatsApp contact required.'}), 400
 
         cursor.execute(
-            f'''INSERT INTO products (user_id, title, category, price, description, whatsapp_number, image_url, listing_type)
-                VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})''',
-            (session['user_id'], title, category, price, description, whatsapp, image_url, listing_type)
+            f'''INSERT INTO products (user_id, title, category, price, description, whatsapp_number, image_url, video_url, listing_type)
+                VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})''',
+            (session['user_id'], title, category, price, description, whatsapp, image_url, video_url, listing_type)
         )
         db.commit()
         return jsonify({'success': True, 'message': f'Listing published on Ijebu {listing_type} Hub!'})
@@ -604,7 +647,7 @@ def update_dating_profile():
         return jsonify({'success': False, 'message': 'Login required.'}), 401
     data = request.json or {}
     age = int(data.get('age', 18))
-    gender = data.get('gender', 'Male')
+    gender = data.get('gender', 'Female')
     intent = data.get('relationship_intent', 'Dating')
     bio = data.get('bio', '').strip()
     occupation = data.get('occupation', '').strip()
@@ -630,23 +673,41 @@ def get_dating_matches():
     p = query_param()
     
     current_uid = session.get('user_id') or 0
-    gender_filter = request.args.get('gender', '').strip()
 
     sql = f'''
         SELECT id, full_name, username, user_type, age, gender, 
-               relationship_intent, bio, occupation, created_at
+               relationship_intent, bio, occupation, avatar_url, created_at
         FROM users 
         WHERE is_dating_active = 1 AND id != {p}
+        ORDER BY id DESC LIMIT 50
     '''
-    params = [current_uid]
-
-    if gender_filter and gender_filter != 'All':
-        sql += f" AND gender = {p}"
-        params.append(gender_filter)
-
-    sql += " ORDER BY id DESC LIMIT 50"
-    cursor.execute(sql, tuple(params))
+    cursor.execute(sql, (current_uid,))
     return jsonify([dict(r) for r in cursor.fetchall()])
+
+
+# UPDATE FB-STYLE PROFILE
+@app.route('/api/users/profile/update', methods=['POST'])
+def update_user_profile_media():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    data = request.json or {}
+    avatar_url = data.get('avatar_url', '').strip()
+    cover_url = data.get('cover_url', '').strip()
+    bio = data.get('bio', '').strip()
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    
+    if avatar_url:
+        cursor.execute(f"UPDATE users SET avatar_url = {p} WHERE id = {p}", (avatar_url, session['user_id']))
+    if cover_url:
+        cursor.execute(f"UPDATE users SET cover_url = {p} WHERE id = {p}", (cover_url, session['user_id']))
+    if bio:
+        cursor.execute(f"UPDATE users SET bio = {p} WHERE id = {p}", (bio, session['user_id']))
+        
+    db.commit()
+    return jsonify({'success': True, 'message': 'Profile updated!'})
 
 
 # =============================================================================
@@ -666,14 +727,15 @@ def handle_posts():
         data = request.json or {}
         content = (data.get('content') or '').strip()
         image_url = (data.get('image_url') or '').strip()
+        video_url = (data.get('video_url') or '').strip()
         post_type = (data.get('post_type') or 'Social').strip()
 
-        if not content and not image_url:
-            return jsonify({'success': False, 'message': 'Write something or attach an image.'}), 400
+        if not content and not image_url and not video_url:
+            return jsonify({'success': False, 'message': 'Write something or attach an image/video.'}), 400
 
         cursor.execute(
-            f"INSERT INTO posts (user_id, content, image_url, post_type) VALUES ({p}, {p}, {p}, {p})",
-            (session['user_id'], content, image_url, post_type)
+            f"INSERT INTO posts (user_id, content, image_url, video_url, post_type) VALUES ({p}, {p}, {p}, {p}, {p})",
+            (session['user_id'], content, image_url, video_url, post_type)
         )
         db.commit()
         return jsonify({'success': True, 'message': 'Published successfully!'})
@@ -683,8 +745,8 @@ def handle_posts():
 
     cursor.execute(
         f'''
-        SELECT p.id, p.user_id, p.content, p.post_type, p.image_url, p.created_at,
-               u.full_name, u.username, u.user_type, u.is_verified_merchant,
+        SELECT p.id, p.user_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
+               u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
                (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
                CASE WHEN EXISTS (
                    SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}
@@ -736,7 +798,8 @@ def get_user_profile(username):
 
     cursor.execute(
         f'''SELECT id, full_name, username, user_type, referral_code, wallet_balance, 
-                   is_verified_merchant, age, gender, relationship_intent, bio, occupation, created_at
+                   is_verified_merchant, age, gender, relationship_intent, bio, occupation,
+                   avatar_url, cover_url, created_at
             FROM users WHERE LOWER(username) = {p}''',
         (username.lower(),)
     )
@@ -752,8 +815,8 @@ def get_user_profile(username):
 
     cursor.execute(
         f'''
-        SELECT p.id, p.user_id, p.content, p.post_type, p.image_url, p.created_at,
-               u.full_name, u.username, u.user_type, u.is_verified_merchant,
+        SELECT p.id, p.user_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
+               u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
                (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
                CASE WHEN EXISTS (
                    SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}
@@ -832,7 +895,7 @@ def chat_partners():
         other_id = row['other_id']
         last_id  = row['last_id']
 
-        cursor.execute(f"SELECT id, full_name, username, user_type FROM users WHERE id = {p}", (other_id,))
+        cursor.execute(f"SELECT id, full_name, username, user_type, avatar_url FROM users WHERE id = {p}", (other_id,))
         u = cursor.fetchone()
         if not u:
             continue
@@ -865,7 +928,7 @@ def chat_thread(username):
     db = get_db(); cursor = db.cursor(); p = query_param()
     uid = session['user_id']
 
-    cursor.execute(f"SELECT id, full_name, username, user_type FROM users WHERE LOWER(username) = {p}", (username.lower(),))
+    cursor.execute(f"SELECT id, full_name, username, user_type, avatar_url FROM users WHERE LOWER(username) = {p}", (username.lower(),))
     other = cursor.fetchone()
     if not other:
         return jsonify({'success': False, 'message': 'User not found.'}), 404
@@ -942,7 +1005,7 @@ def block_user(username):
 
 
 # =============================================================================
-# ADMIN API
+# ADMIN API (WITH MEMBER DELETION & PARTNER APPROVALS)
 # =============================================================================
 
 @app.route('/api/admin/overview', methods=['GET'])
@@ -960,8 +1023,8 @@ def get_admin_overview():
     total_products = cursor.fetchone()[0]
     cursor.execute("SELECT COALESCE(SUM(wallet_balance), 0) FROM users")
     total_wallets = float(cursor.fetchone()[0] or 0)
-    cursor.execute("SELECT COUNT(*) FROM payout_requests WHERE status = 'pending'")
-    pending = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM partner_requests WHERE status = 'pending'")
+    pending_partners = cursor.fetchone()[0]
 
     return jsonify({
         'success': True,
@@ -969,8 +1032,70 @@ def get_admin_overview():
         'total_partners': total_partners,
         'total_products': total_products,
         'total_partner_wallets': total_wallets,
-        'pending_payouts': pending
+        'pending_partners': pending_partners
     })
+
+
+@app.route('/api/admin/users', methods=['GET', 'DELETE'])
+def admin_manage_users():
+    admin, err = require_admin()
+    if err: return err
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'DELETE':
+        user_id = request.args.get('user_id')
+        if not user_id:
+            return jsonify({'success': False, 'message': 'User ID required.'}), 400
+            
+        cursor.execute(f"DELETE FROM posts WHERE user_id = {p}", (user_id,))
+        cursor.execute(f"DELETE FROM products WHERE user_id = {p}", (user_id,))
+        cursor.execute(f"DELETE FROM users WHERE id = {p}", (user_id,))
+        db.commit()
+        return jsonify({'success': True, 'message': 'User account removed.'})
+
+    cursor.execute("SELECT id, full_name, username, phone, user_type, referral_code, created_at FROM users ORDER BY id DESC")
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+
+@app.route('/api/admin/partner-requests', methods=['GET', 'POST'])
+def admin_partner_requests():
+    admin, err = require_admin()
+    if err: return err
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'POST':
+        data = request.json or {}
+        req_id = data.get('request_id')
+        action = data.get('action') # 'approve' or 'reject'
+
+        cursor.execute(f"SELECT user_id FROM partner_requests WHERE id = {p}", (req_id,))
+        req = cursor.fetchone()
+        if not req:
+            return jsonify({'success': False, 'message': 'Request not found.'}), 404
+
+        uid = req['user_id']
+        if action == 'approve':
+            cursor.execute(f"UPDATE users SET user_type = 'CPN Partner', is_verified_merchant = 1 WHERE id = {p}", (uid,))
+            cursor.execute(f"UPDATE partner_requests SET status = 'approved' WHERE id = {p}", (req_id,))
+            db.commit()
+            process_cpn_commission(uid, upgrade_fee=2000.0)
+            return jsonify({'success': True, 'message': 'Member approved as CPN Partner!'})
+        else:
+            cursor.execute(f"UPDATE partner_requests SET status = 'rejected' WHERE id = {p}", (req_id,))
+            db.commit()
+            return jsonify({'success': True, 'message': 'Partner claim rejected.'})
+
+    cursor.execute('''
+        SELECT pr.*, u.full_name, u.phone, u.username
+        FROM partner_requests pr
+        JOIN users u ON pr.user_id = u.id ORDER BY pr.id DESC
+    ''')
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
 
 @app.route('/api/admin/payouts', methods=['GET', 'POST'])
 def manage_payouts():
@@ -1069,26 +1194,30 @@ INDEX_TEMPLATE = r"""
 	
 	.feed-post { background: #fff; border: 1.5px solid var(--border-light); border-radius: 16px; padding: 1rem; margin-bottom: 0.85rem; }
 	.post-header { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 8px; }
-	.avatar { width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 0.95rem; flex-shrink: 0; cursor: pointer; }
-	.post-author { font-size: 0.92rem; }
+	.avatar { width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 0.95rem; flex-shrink: 0; cursor: pointer; overflow:hidden; background-size:cover; background-position:center; }
+	.avatar img { width:100%; height:100%; object-fit:cover; }
+    .post-author { font-size: 0.92rem; }
 	.post-meta { font-size: 0.72rem; color: var(--text-muted); }
 	.post-content { font-size: 0.92rem; line-height: 1.5; white-space: pre-wrap; margin-bottom: 8px; }
-    .post-img { width: 100%; max-height: 300px; object-fit: cover; border-radius: 12px; margin-bottom: 8px; }
+    .post-media { width: 100%; max-height: 350px; object-fit: cover; border-radius: 12px; margin-bottom: 8px; }
 	.post-actions { display: flex; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border-light); }
 	.post-action { flex: 1; background: none; border: none; padding: 8px; border-radius: 8px; font-size: 0.82rem; font-weight: 700; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
 	.post-action.liked { color: #ef4444; }
 
 	.product-card { display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--border-light); padding-bottom: 12px; margin-bottom: 12px; }
 	.product-card:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
-	.product-img-box { width: 72px; height: 72px; border-radius: 12px; background: #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: #0f172a; flex-shrink: 0; overflow: hidden; }
-    .product-img-box img { width: 100%; height: 100%; object-fit: cover; }
+	.product-img-box { width: 76px; height: 76px; border-radius: 12px; background: #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: #0f172a; flex-shrink: 0; overflow: hidden; }
+    .product-img-box img, .product-img-box video { width: 100%; height: 100%; object-fit: cover; }
 	.btn-whatsapp { background: #25d366; color: #fff; border: none; padding: 8px 14px; border-radius: 10px; font-weight: 700; font-size: 0.8rem; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
 
-	.dating-card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 16px; padding: 1rem; margin-bottom: 0.85rem; display: flex; gap: 12px; align-items: center; }
-	
-	.profile-hero { background: var(--navy-blue); color: #fff; border-radius: 18px; padding: 1.5rem 1.25rem; margin-bottom: 1rem; text-align: center; }
-	.profile-avatar { width: 76px; height: 72px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.6rem; margin: 0 auto 10px; border: 3px solid rgba(255,255,255,0.2); }
-	.profile-name { font-size: 1.2rem; font-weight: 800; }
+	/* FACEBOOK-STYLE PROFILE */
+	.fb-profile-card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 18px; overflow: hidden; margin-bottom: 1rem; position: relative; }
+	.fb-cover-banner { height: 140px; background: linear-gradient(135deg, #0b1e36, #1e3a8a); background-size: cover; background-position: center; position: relative; }
+	.fb-avatar-wrap { position: absolute; bottom: -35px; left: 20px; width: 80px; height: 80px; border-radius: 50%; border: 4px solid #fff; background: var(--emerald-green); overflow: hidden; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 800; }
+	.fb-avatar-wrap img { width: 100%; height: 100%; object-fit: cover; }
+	.fb-profile-body { padding: 45px 20px 20px; }
+	.fb-profile-name { font-size: 1.25rem; font-weight: 800; color: var(--navy-blue); }
+	.fb-profile-bio { font-size: 0.85rem; color: var(--text-muted); margin: 6px 0 12px; line-height: 1.4; }
 
 	.cpn-wallet-card { background: linear-gradient(135deg, #0b1e36, #1e3a8a); color: #fff; border-radius: 18px; padding: 1.25rem; margin-bottom: 1rem; }
 	.cpn-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; margin-bottom: 10px; }
@@ -1099,6 +1228,8 @@ INDEX_TEMPLATE = r"""
 	.chat-bubble.them { background:#fff; border:1.5px solid var(--border-light); border-bottom-left-radius:4px; }
 	.chat-time { font-size:0.65rem; opacity:0.7; margin-top:3px; }
 	.chat-partner-row { display:flex; gap:12px; align-items:center; padding:12px; border-bottom:1px solid var(--border-light); cursor:pointer; }
+
+    .bank-box { background:#f1f5f9; border:1.5px dashed var(--navy-blue); border-radius:12px; padding:1rem; margin:1rem 0; font-size:0.88rem; line-height:1.6; }
 
 	footer { background: #fff; text-align: center; padding: 1.5rem 1rem; font-size: 0.82rem; color: var(--text-muted); border-top: 1.5px solid var(--border-light); margin-top: auto; line-height: 1.6; }
 	footer a { color: var(--emerald-green); text-decoration: none; font-weight: 700; }
@@ -1137,12 +1268,13 @@ INDEX_TEMPLATE = r"""
         <div class="card">
             <form onsubmit="handlePostSubmit(event, 'Social')">
                 <div class="form-group">
-                    <textarea class="form-control" id="post-content" rows="2" placeholder="Share community news, local updates, or stories..."></textarea>
+                    <textarea class="form-control" id="post-content" rows="2" placeholder="What's happening in Ijebu today?..."></textarea>
                 </div>
                 <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
-                    <input type="file" id="post-file-input" class="form-control" accept="image/*" style="padding:6px;">
+                    <label style="font-size:0.75rem;font-weight:700;">Attach Photo/Video:</label>
+                    <input type="file" id="post-file-input" class="form-control" accept="image/*,video/*" style="padding:6px;">
                 </div>
-                <button type="submit" class="btn-submit" style="background:var(--navy-blue);">Publish Post</button>
+                <button type="submit" class="btn-submit" style="background:var(--navy-blue);">Publish Update</button>
             </form>
         </div>
         <div id="feed-posts-container"></div>
@@ -1157,7 +1289,7 @@ INDEX_TEMPLATE = r"""
             </button>
         </div>
         <div class="card" style="padding:0.75rem;margin-bottom:1rem;">
-            <input type="text" class="form-control" id="market-search" placeholder="Search produce, land, electronics..." onkeyup="loadCategoryListings('Market', 'products-container')">
+            <input type="text" class="form-control" id="market-search" placeholder="Search farm produce, land, electronics..." onkeyup="loadCategoryListings('Market', 'products-container')">
         </div>
         <div id="products-container" class="card"></div>
     </div>
@@ -1197,10 +1329,10 @@ INDEX_TEMPLATE = r"""
     <!-- EVENTS -->
     <div id="view-events" class="view-section">
         <div class="card">
-            <h3 style="font-weight:800;color:var(--navy-blue);margin-bottom:8px;">📅 Local Events &amp; Parties</h3>
+            <h3 style="font-weight:800;color:var(--navy-blue);margin-bottom:8px;">📅 Local Events &amp; Festivals</h3>
             <form onsubmit="handlePostSubmit(event, 'Event')">
                 <div class="form-group">
-                    <textarea class="form-control" id="event-content" rows="2" placeholder="Announce an upcoming party, festival, or town hall event..."></textarea>
+                    <textarea class="form-control" id="event-content" rows="2" placeholder="Announce an upcoming party, Ojude Oba, festival, or event..."></textarea>
                 </div>
                 <button type="submit" class="btn-submit" style="background:#9333ea;">Publish Event</button>
             </form>
@@ -1235,20 +1367,36 @@ INDEX_TEMPLATE = r"""
 
 </div>
 
-<!-- MODALS -->
+<!-- CPN UPGRADE MODAL WITH DIRECT BANK TRANSFER -->
 <div id="cpn-upgrade-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999;align-items:center;justify-content:center;padding:1rem;">
-    <div class="card" style="max-width:440px;width:100%;background:#fff;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
-            <h3 style="font-weight:800;color:var(--navy-blue);">Become CPN Partner</h3>
+    <div class="card" style="max-width:460px;width:100%;background:#fff;max-height:90vh;overflow-y:auto;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <h3 style="font-weight:800;color:var(--navy-blue);">Become CPN Partner (₦2,000)</h3>
             <button onclick="closeCPNModal()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;">&times;</button>
         </div>
-        <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem;line-height:1.5;">
-            To list services or products on Ijebu Connect, you must register as an official <strong>CPN Partner (₦2,000)</strong>. Unlock unlimited listings and earn <strong>10% Tier-1 &amp; 5% Tier-2 referral rewards</strong> on traders you invite!
+        <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:0.75rem;line-height:1.5;">
+            To list products/services on Market, Beauty, or Jobs hubs, you must register as an official <strong>CPN Partner</strong>. Unlock unlimited listings and earn <strong>10% Tier-1 &amp; 5% Tier-2 referral rewards</strong> on traders you invite!
         </p>
-        <button class="btn-submit" style="background:var(--amber-gold);" onclick="triggerCPNUpgrade()">Proceed to CPN Partner Upgrade (₦2,000)</button>
+
+        <div class="bank-box">
+            <strong style="color:var(--navy-blue);display:block;margin-bottom:4px;">🏦 Bank Transfer Details:</strong>
+            Bank Name: <b>OPay</b><br>
+            Account Number: <b style="color:var(--emerald-green);font-size:1.05rem;">09018363715</b><br>
+            Account Name: <b>Rotimi Williams Oladele</b><br>
+            Amount: <b style="color:var(--amber-gold);">₦2,000</b>
+        </div>
+
+        <form onsubmit="handleClaimBankTransfer(event)">
+            <div class="form-group">
+                <label>Transfer Reference / Sender Name</label>
+                <input type="text" id="cpn-ref-note" class="form-control" placeholder="e.g. Paid from OPay / John Doe" required>
+            </div>
+            <button type="submit" class="btn-submit" style="background:var(--emerald-green);margin-bottom:8px;">Submit Payment for Admin Approval</button>
+        </form>
     </div>
 </div>
 
+<!-- SELL / LISTING MODAL -->
 <div id="sell-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999;align-items:center;justify-content:center;padding:1rem;">
     <div class="card" style="max-width:480px;width:100%;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
@@ -1259,7 +1407,7 @@ INDEX_TEMPLATE = r"""
             <input type="hidden" id="prod-type" value="Market">
             <div class="form-group">
                 <label>Title</label>
-                <input type="text" class="form-control" id="prod-title" placeholder="e.g. Fresh Palm Oil / Bridal Makeup" required>
+                <input type="text" class="form-control" id="prod-title" placeholder="e.g. Fresh Palm Oil / Bridal Makeup / Electrician" required>
             </div>
             <div class="form-group">
                 <label>Category</label>
@@ -1274,8 +1422,8 @@ INDEX_TEMPLATE = r"""
                 <input type="text" class="form-control" id="prod-whatsapp" placeholder="09018363715" required>
             </div>
             <div class="form-group">
-                <label>Upload Photo</label>
-                <input type="file" id="prod-img-file" class="form-control" accept="image/*">
+                <label>Upload Photo/Video</label>
+                <input type="file" id="prod-img-file" class="form-control" accept="image/*,video/*">
             </div>
             <div class="form-group">
                 <label>Description</label>
@@ -1286,6 +1434,32 @@ INDEX_TEMPLATE = r"""
     </div>
 </div>
 
+<!-- EDIT PROFILE MODAL -->
+<div id="edit-profile-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999;align-items:center;justify-content:center;padding:1rem;">
+    <div class="card" style="max-width:440px;width:100%;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+            <h3 style="font-weight:800;color:var(--navy-blue);">Edit Profile Photos &amp; Bio</h3>
+            <button onclick="closeEditProfileModal()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;">&times;</button>
+        </div>
+        <form onsubmit="handleProfileUpdateSubmit(event)">
+            <div class="form-group">
+                <label>Profile Avatar Picture</label>
+                <input type="file" id="edit-avatar-file" class="form-control" accept="image/*">
+            </div>
+            <div class="form-group">
+                <label>Cover Banner Image</label>
+                <input type="file" id="edit-cover-file" class="form-control" accept="image/*">
+            </div>
+            <div class="form-group">
+                <label>Bio</label>
+                <textarea id="edit-bio-text" class="form-control" rows="2" placeholder="Short intro about yourself..."></textarea>
+            </div>
+            <button type="submit" class="btn-submit">Save Profile Changes</button>
+        </form>
+    </div>
+</div>
+
+<!-- DATING SETTINGS MODAL -->
 <div id="dating-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999;align-items:center;justify-content:center;padding:1rem;">
     <div class="card" style="max-width:440px;width:100%;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
@@ -1329,6 +1503,7 @@ INDEX_TEMPLATE = r"""
     </div>
 </div>
 
+<!-- CASHOUT MODAL -->
 <div id="cashout-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999;align-items:center;justify-content:center;padding:1rem;">
     <div class="card" style="max-width:420px;width:100%;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
@@ -1438,12 +1613,12 @@ async function handleLogout() {
 
 // FILE UPLOAD HELPER
 async function uploadSelectedFile(fileInput) {
-    if(!fileInput || !fileInput.files[0]) return '';
+    if(!fileInput || !fileInput.files[0]) return {url:'', is_video: false};
     const formData = new FormData();
     formData.append('file', fileInput.files[0]);
     const res = await fetch('/api/upload', {method:'POST', body: formData});
     const data = await res.json();
-    return data.success ? data.image_url : '';
+    return data.success ? {url: data.url, is_video: data.is_video} : {url:'', is_video: false};
 }
 
 // POSTS / SOCIAL / EVENTS
@@ -1453,18 +1628,21 @@ async function handlePostSubmit(e, postType) {
     
     const contentEl = postType === 'Event' ? document.getElementById('event-content') : document.getElementById('post-content');
     const content = contentEl.value.trim();
-    if(!content) return showToast('Please enter post text', 'error');
+    if(!content) return showToast('Please enter text content', 'error');
 
     let imageUrl = '';
+    let videoUrl = '';
     const fileInput = document.getElementById('post-file-input');
     if(fileInput && fileInput.files[0]) {
-        imageUrl = await uploadSelectedFile(fileInput);
+        const upload = await uploadSelectedFile(fileInput);
+        if(upload.is_video) videoUrl = upload.url;
+        else imageUrl = upload.url;
     }
 
     const res = await fetch('/api/posts', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({content, image_url: imageUrl, post_type: postType})
+        body: JSON.stringify({content, image_url: imageUrl, video_url: videoUrl, post_type: postType})
     });
     const data = await res.json();
     if(data.success) {
@@ -1488,18 +1666,27 @@ async function loadPosts(postType, containerId) {
 
 function renderPostCard(p) {
     const badge = p.user_type === 'CPN Partner' ? '<span class="badge badge-partner">CPN Partner</span>' : (p.user_type === 'Admin' ? '<span class="badge badge-admin">Admin</span>' : '');
-    const imgHtml = p.image_url ? `<img src="${p.image_url}" class="post-img">` : '';
+    
+    let mediaHtml = '';
+    if(p.video_url) {
+        mediaHtml = `<video src="${p.video_url}" controls class="post-media"></video>`;
+    } else if(p.image_url) {
+        mediaHtml = `<img src="${p.image_url}" class="post-media">`;
+    }
+
+    const avatarHtml = p.avatar_url ? `<img src="${p.avatar_url}">` : p.full_name.charAt(0).toUpperCase();
+
     return `
         <div class="feed-post">
             <div class="post-header">
-                <div class="avatar" style="background:var(--navy-blue);" onclick="openProfile('${p.username}')">${p.full_name.charAt(0).toUpperCase()}</div>
+                <div class="avatar" style="background:var(--navy-blue);" onclick="openProfile('${p.username}')">${avatarHtml}</div>
                 <div>
                     <div class="post-author"><span class="clickable-user" onclick="openProfile('${p.username}')">${p.full_name}</span> ${badge}</div>
                     <div class="post-meta">@${p.username} • ${new Date(p.created_at).toLocaleDateString()}</div>
                 </div>
             </div>
             <div class="post-content">${p.content}</div>
-            ${imgHtml}
+            ${mediaHtml}
             <div class="post-actions">
                 <button class="post-action ${p.liked_by_me ? 'liked':''}" onclick="toggleLike(${p.id})">❤️ ${p.likes_count}</button>
             </div>
@@ -1513,7 +1700,7 @@ async function toggleLike(pid) {
     loadPosts('Social', 'feed-posts-container');
 }
 
-// MULTI-PILLAR LISTINGS (MARKET, BEAUTY, JOBS)
+// MULTI-PILLAR LISTINGS
 async function loadCategoryListings(listingType, containerId) {
     const q = (listingType === 'Market') ? document.getElementById('market-search').value.trim() : '';
     const res = await fetch(`/api/products?type=${listingType}&q=${encodeURIComponent(q)}`);
@@ -1525,19 +1712,23 @@ async function loadCategoryListings(listingType, containerId) {
         return;
     }
 
-    container.innerHTML = items.map(p => `
-        <div class="product-card">
-            <div class="product-img-box">
-                ${p.image_url ? `<img src="${p.image_url}">` : '<i class="fa-solid fa-store"></i>'}
+    container.innerHTML = items.map(p => {
+        let mediaBox = '<i class="fa-solid fa-store"></i>';
+        if(p.video_url) mediaBox = `<video src="${p.video_url}" controls></video>`;
+        else if(p.image_url) mediaBox = `<img src="${p.image_url}">`;
+
+        return `
+            <div class="product-card">
+                <div class="product-img-box">${mediaBox}</div>
+                <div style="flex:1;">
+                    <h4 style="font-weight:800;color:var(--navy-blue);font-size:0.95rem;">${p.title}</h4>
+                    <div style="font-weight:800;color:var(--emerald-green);font-size:0.9rem;margin:2px 0;">${p.price > 0 ? formatNaira(p.price) : 'Negotiable'}</div>
+                    <div style="font-size:0.75rem;color:var(--text-muted);">${p.category} • By <span class="clickable-user" onclick="openProfile('${p.seller_username}')">@${p.seller_username}</span></div>
+                </div>
+                <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" class="btn-whatsapp"><i class="fa-brands fa-whatsapp"></i> Chat</a>
             </div>
-            <div style="flex:1;">
-                <h4 style="font-weight:800;color:var(--navy-blue);font-size:0.95rem;">${p.title}</h4>
-                <div style="font-weight:800;color:var(--emerald-green);font-size:0.9rem;margin:2px 0;">${p.price > 0 ? formatNaira(p.price) : 'Contact for Price'}</div>
-                <div style="font-size:0.75rem;color:var(--text-muted);">${p.category} • By <span class="clickable-user" onclick="openProfile('${p.seller_username}')">@${p.seller_username}</span></div>
-            </div>
-            <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" class="btn-whatsapp"><i class="fa-brands fa-whatsapp"></i> Chat</a>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 function startSellItem(type = 'Market') {
@@ -1553,13 +1744,32 @@ function startSellItem(type = 'Market') {
 function closeCPNModal() { document.getElementById('cpn-upgrade-modal').style.display = 'none'; }
 function closeSellModal() { document.getElementById('sell-modal').style.display = 'none'; }
 
+async function handleClaimBankTransfer(e) {
+    e.preventDefault();
+    const note = document.getElementById('cpn-ref-note').value;
+    const res = await fetch('/api/cpn/claim-bank-transfer', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({reference_note: note})
+    });
+    const data = await res.json();
+    if(data.success) {
+        showToast(data.message);
+        closeCPNModal();
+    } else showToast(data.message, 'error');
+}
+
 async function handleProductSubmit(e) {
     e.preventDefault();
     const type = document.getElementById('prod-type').value;
     const fileInput = document.getElementById('prod-img-file');
     let uploadedImg = '';
+    let uploadedVid = '';
+    
     if(fileInput && fileInput.files[0]) {
-        uploadedImg = await uploadSelectedFile(fileInput);
+        const upload = await uploadSelectedFile(fileInput);
+        if(upload.is_video) uploadedVid = upload.url;
+        else uploadedImg = upload.url;
     }
 
     const res = await fetch('/api/products', {
@@ -1572,7 +1782,8 @@ async function handleProductSubmit(e) {
             whatsapp_number: document.getElementById('prod-whatsapp').value,
             description: document.getElementById('prod-desc').value,
             listing_type: type,
-            image_url: uploadedImg
+            image_url: uploadedImg,
+            video_url: uploadedVid
         })
     });
     const data = await res.json();
@@ -1622,34 +1833,61 @@ async function loadDatingMatches() {
         container.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No active singles on match feed yet. Click "Set Up My Dating Profile" to be the first!</div>`;
         return;
     }
-    container.innerHTML = matches.map(m => `
-        <div class="dating-card">
-            <div class="avatar" style="background:#7c3aed;width:54px;height:54px;font-size:1.3rem;">${m.full_name.charAt(0).toUpperCase()}</div>
-            <div style="flex:1;">
-                <h4 style="font-weight:800;color:var(--navy-blue);">${m.full_name}, ${m.age}</h4>
-                <div style="font-size:0.78rem;color:var(--emerald-green);font-weight:700;">${m.relationship_intent} • ${m.gender}</div>
-                <div style="font-size:0.82rem;color:var(--text-muted);margin-top:2px;">"${m.bio || 'Living in Ijebu'}"</div>
+    container.innerHTML = matches.map(m => {
+        const avatarHtml = m.avatar_url ? `<img src="${m.avatar_url}">` : m.full_name.charAt(0).toUpperCase();
+        return `
+            <div style="background:#fff;border:1.5px solid var(--border-light);border-radius:16px;padding:1rem;margin-bottom:0.85rem;display:flex;gap:12px;align-items:center;">
+                <div class="avatar" style="background:#7c3aed;width:56px;height:56px;font-size:1.3rem;">${avatarHtml}</div>
+                <div style="flex:1;">
+                    <h4 style="font-weight:800;color:var(--navy-blue);">${m.full_name}, ${m.age}</h4>
+                    <div style="font-size:0.78rem;color:var(--emerald-green);font-weight:700;">${m.relationship_intent} • ${m.gender}</div>
+                    <div style="font-size:0.82rem;color:var(--text-muted);margin-top:2px;">"${m.bio || 'Living in Ijebu'}"</div>
+                </div>
+                <button onclick="messageUser('${m.username}')" style="background:#4f46e5;color:#fff;border:none;padding:8px 12px;border-radius:10px;font-weight:700;font-size:0.78rem;cursor:pointer;">Say Hi 👋</button>
             </div>
-            <button onclick="messageUser('${m.username}')" style="background:#4f46e5;color:#fff;border:none;padding:8px 12px;border-radius:10px;font-weight:700;font-size:0.78rem;cursor:pointer;">Say Hi 👋</button>
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
-// CPN UPGRADE
-async function triggerCPNUpgrade() {
-    const res = await fetch('/api/cpn/upgrade', {method:'POST'});
+// FACEBOOK-STYLE PROFILE
+function openEditProfileModal() { document.getElementById('edit-profile-modal').style.display = 'flex'; }
+function closeEditProfileModal() { document.getElementById('edit-profile-modal').style.display = 'none'; }
+
+async function handleProfileUpdateSubmit(e) {
+    e.preventDefault();
+    const avatarInput = document.getElementById('edit-avatar-file');
+    const coverInput = document.getElementById('edit-cover-file');
+    
+    let avatarUrl = '';
+    let coverUrl = '';
+
+    if(avatarInput && avatarInput.files[0]) {
+        const up = await uploadSelectedFile(avatarInput);
+        avatarUrl = up.url;
+    }
+    if(coverInput && coverInput.files[0]) {
+        const up = await uploadSelectedFile(coverInput);
+        coverUrl = up.url;
+    }
+
+    const res = await fetch('/api/users/profile/update', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            avatar_url: avatarUrl,
+            cover_url: coverUrl,
+            bio: document.getElementById('edit-bio-text').value
+        })
+    });
     const data = await res.json();
-    if(data.paystack) {
-        window.location.href = data.redirect_url;
-    } else if(data.success) {
+    if(data.success) {
         showToast(data.message);
-        closeCPNModal();
+        closeEditProfileModal();
         await checkSession();
         openProfile(currentUser.username);
     } else showToast(data.message, 'error');
 }
 
-// PROFILE
 async function openProfile(username) {
     const res = await fetch(`/api/users/${encodeURIComponent(username)}`);
     const data = await res.json();
@@ -1679,11 +1917,26 @@ async function openProfile(username) {
         </button>
     ` : '';
 
+    const editProfileBtn = isSelf ? `
+        <button onclick="openEditProfileModal()" style="background:var(--navy-blue);color:#fff;border:none;padding:8px 14px;border-radius:10px;font-weight:700;font-size:0.8rem;cursor:pointer;margin-top:8px;">
+            ✏️ Edit FB Cover &amp; Avatar
+        </button>
+    ` : '';
+
+    const coverStyle = u.cover_url ? `style="background-image:url('${u.cover_url}');"` : '';
+    const avatarInner = u.avatar_url ? `<img src="${u.avatar_url}">` : u.full_name.charAt(0).toUpperCase();
+
     container.innerHTML = `
-        <div class="profile-hero">
-            <div class="profile-avatar" style="background:var(--emerald-green);">${u.full_name.charAt(0).toUpperCase()}</div>
-            <div class="profile-name">${u.full_name}</div>
-            <div style="font-size:0.85rem;opacity:0.8;">@${u.username} • ${u.user_type}</div>
+        <div class="fb-profile-card">
+            <div class="fb-cover-banner" ${coverStyle}>
+                <div class="fb-avatar-wrap">${avatarInner}</div>
+            </div>
+            <div class="fb-profile-body">
+                <div class="fb-profile-name">${u.full_name} <span class="badge ${isPartner ? 'badge-partner':'badge-admin'}">${u.user_type}</span></div>
+                <div style="font-size:0.8rem;color:var(--text-muted);font-weight:700;">@${u.username}</div>
+                <div class="fb-profile-bio">${u.bio || 'Resident of Ijebu'}</div>
+                ${editProfileBtn}
+            </div>
         </div>
         ${messageBtn}
         ${cpnWalletBlock}
@@ -1739,19 +1992,22 @@ async function loadChatPartners() {
     const data = await res.json();
     const c = document.getElementById('chat-partners-container');
     if(!data.success || !data.partners.length) {
-        c.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No conversations yet.<br><small>Visit a member's profile or single listing and tap "Message" or "Say Hi" to start.</small></div>`;
+        c.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No conversations yet.<br><small>Visit a member's profile and tap "Message" to start.</small></div>`;
         return;
     }
-    c.innerHTML = data.partners.map(p => `
-        <div class="chat-partner-row" onclick="openChatThread('${p.user.username}')">
-            <div class="avatar" style="background:var(--navy-blue);">${p.user.full_name.charAt(0).toUpperCase()}</div>
-            <div style="flex:1;min-width:0;">
-                <div style="font-weight:800;color:var(--navy-blue);">${p.user.full_name}</div>
-                <div style="font-size:0.78rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.last_from_me ? 'You: ' : ''}${p.last_message}</div>
+    c.innerHTML = data.partners.map(p => {
+        const avatarHtml = p.user.avatar_url ? `<img src="${p.user.avatar_url}">` : p.user.full_name.charAt(0).toUpperCase();
+        return `
+            <div class="chat-partner-row" onclick="openChatThread('${p.user.username}')">
+                <div class="avatar" style="background:var(--navy-blue);">${avatarHtml}</div>
+                <div style="flex:1;min-width:0;">
+                    <div style="font-weight:800;color:var(--navy-blue);">${p.user.full_name}</div>
+                    <div style="font-size:0.78rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.last_from_me ? 'You: ' : ''}${p.last_message}</div>
+                </div>
+                ${p.unread ? `<span style="background:#ef4444;color:#fff;font-size:0.7rem;font-weight:800;padding:2px 6px;border-radius:10px;">${p.unread}</span>` : ''}
             </div>
-            ${p.unread ? `<span style="background:#ef4444;color:#fff;font-size:0.7rem;font-weight:800;padding:2px 6px;border-radius:10px;">${p.unread}</span>` : ''}
-        </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 async function openChatThread(username) {
@@ -1764,9 +2020,11 @@ async function openChatThread(username) {
     const data = await res.json();
     if(!data.success) return showToast(data.message, 'error');
 
+    const avatarHtml = data.other.avatar_url ? `<img src="${data.other.avatar_url}">` : data.other.full_name.charAt(0).toUpperCase();
+
     document.getElementById('chat-thread-header').innerHTML = `
         <div style="display:flex;align-items:center;gap:10px;">
-            <div class="avatar" style="background:var(--navy-blue);">${data.other.full_name.charAt(0).toUpperCase()}</div>
+            <div class="avatar" style="background:var(--navy-blue);">${avatarHtml}</div>
             <div>
                 <div style="font-weight:800;color:var(--navy-blue);">${data.other.full_name}</div>
                 <div style="font-size:0.72rem;color:var(--text-muted);">@${data.other.username}</div>
@@ -1984,21 +2242,27 @@ ADMIN_TEMPLATE = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin Dashboard - Ijebu Connect</title>
+<title>Admin Control Panel - Ijebu Connect</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
-    body { font-family:'Plus Jakarta Sans', sans-serif; background:#f8fafc; color:#0f172a; padding:1.5rem; max-width:820px; margin:0 auto; }
+    body { font-family:'Plus Jakarta Sans', sans-serif; background:#f8fafc; color:#0f172a; padding:1.5rem; max-width:920px; margin:0 auto; }
     .admin-header { display:flex; align-items:center; gap:12px; margin-bottom:1.25rem; }
     .admin-logo { height:50px; width:auto; }
     .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:1rem; margin-bottom:1.5rem; }
     .card { background:#fff; border:1.5px solid #cbd5e1; border-radius:14px; padding:1.25rem; }
     .val { font-size:1.5rem; font-weight:800; color:#059669; }
     .lbl { font-size:0.75rem; color:#64748b; font-weight:700; text-transform:uppercase; }
-    table { width:100%; border-collapse:collapse; background:#fff; border-radius:14px; overflow:hidden; border:1.5px solid #cbd5e1; font-size:0.85rem; }
+    
+    .admin-tabs { display:flex; gap:8px; margin-bottom:1rem; border-bottom:2px solid #cbd5e1; padding-bottom:8px; }
+    .admin-tab { padding:8px 16px; border-radius:8px; border:none; background:#fff; font-weight:700; cursor:pointer; color:#64748b; }
+    .admin-tab.active { background:#0b1e36; color:#fff; }
+
+    .tab-sec { display:none; } .tab-sec.active { display:block; }
+    table { width:100%; border-collapse:collapse; background:#fff; border-radius:14px; overflow:hidden; border:1.5px solid #cbd5e1; font-size:0.85rem; margin-top:0.5rem; }
     th, td { padding:10px 12px; text-align:left; border-bottom:1px solid #cbd5e1; }
     th { background:#0b1e36; color:#fff; }
-    .btn-act { padding:4px 10px; border-radius:6px; border:none; color:#fff; font-weight:700; cursor:pointer; font-size:0.75rem; }
-    .btn-app { background:#059669; } .btn-rej { background:#ef4444; }
+    .btn-act { padding:5px 12px; border-radius:6px; border:none; color:#fff; font-weight:700; cursor:pointer; font-size:0.75rem; }
+    .btn-app { background:#059669; } .btn-rej { background:#ef4444; } .btn-del { background:#dc2626; }
 </style>
 </head>
 <body>
@@ -2006,37 +2270,135 @@ ADMIN_TEMPLATE = r"""
     <img src="/static/logo.png" alt="Logo" class="admin-logo" onerror="this.style.display='none'">
     <div>
         <h1 style="color:#0b1e36;font-size:1.4rem;line-height:1;">⚙️ Admin Control Panel</h1>
-        <small style="color:#64748b;font-weight:700;">Ijebu Connect Ecosystem</small>
+        <small style="color:#64748b;font-weight:700;">Ijebu Connect System Management</small>
     </div>
 </div>
 <a href="/" style="display:inline-block;margin-bottom:1rem;color:#0b1e36;font-weight:700;text-decoration:none;">← Back to Main Platform</a>
 
 <div class="grid">
-    <div class="card"><div class="val" id="st-users">0</div><div class="lbl">Total Users</div></div>
+    <div class="card"><div class="val" id="st-users">0</div><div class="lbl">Total Members</div></div>
     <div class="card"><div class="val" id="st-partners">0</div><div class="lbl">CPN Partners</div></div>
-    <div class="card"><div class="val" id="st-prods">0</div><div class="lbl">Listings</div></div>
-    <div class="card"><div class="val" id="st-wallets">₦0.00</div><div class="lbl">User Balances</div></div>
+    <div class="card"><div class="val" id="st-pending">0</div><div class="lbl">Pending Partner Upgrades</div></div>
+    <div class="card"><div class="val" id="st-wallets">₦0.00</div><div class="lbl">Partner Balances</div></div>
 </div>
 
-<h3>Pending Bank Cashouts</h3>
-<table style="margin-top:0.5rem;">
-    <thead>
-        <tr><th>User</th><th>Amount</th><th>Bank Details</th><th>Action</th></tr>
-    </thead>
-    <tbody id="payouts-body"></tbody>
-</table>
+<div class="admin-tabs">
+    <button class="admin-tab active" onclick="switchAdminTab('partners')">Partner Payment Claims</button>
+    <button class="admin-tab" onclick="switchAdminTab('members')">Manage Members</button>
+    <button class="admin-tab" onclick="switchAdminTab('payouts')">Bank Cashouts</button>
+</div>
+
+<!-- TAB 1: PARTNER APPROVALS -->
+<div id="adm-partners" class="tab-sec active">
+    <h3>Pending CPN Partner Upgrade Claims (₦2,000)</h3>
+    <table>
+        <thead>
+            <tr><th>Member</th><th>Amount</th><th>Transfer Reference Note</th><th>Action</th></tr>
+        </thead>
+        <tbody id="partner-reqs-body"></tbody>
+    </table>
+</div>
+
+<!-- TAB 2: MEMBERS MANAGEMENT -->
+<div id="adm-members" class="tab-sec">
+    <h3>All Platform Members</h3>
+    <table>
+        <thead>
+            <tr><th>Full Name</th><th>Username</th><th>Phone</th><th>User Type</th><th>Action</th></tr>
+        </thead>
+        <tbody id="members-body"></tbody>
+    </table>
+</div>
+
+<!-- TAB 3: BANK CASHOUTS -->
+<div id="adm-payouts" class="tab-sec">
+    <h3>Member Cashout Requests</h3>
+    <table>
+        <thead>
+            <tr><th>User</th><th>Amount</th><th>Bank Details</th><th>Action</th></tr>
+        </thead>
+        <tbody id="payouts-body"></tbody>
+    </table>
+</div>
 
 <script>
+function switchAdminTab(t) {
+    document.querySelectorAll('.admin-tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-sec').forEach(s => s.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById(`adm-${t}`).classList.add('active');
+}
+
 async function loadAdmin() {
     const res = await fetch('/api/admin/overview');
     const data = await res.json();
     if(!data.success) { alert('Admin access denied.'); window.location.href='/'; return; }
     document.getElementById('st-users').innerText = data.total_users;
     document.getElementById('st-partners').innerText = data.total_partners;
-    document.getElementById('st-prods').innerText = data.total_products;
+    document.getElementById('st-pending').innerText = data.pending_partners;
     document.getElementById('st-wallets').innerText = '₦' + data.total_partner_wallets.toLocaleString();
+    
+    loadPartnerRequests();
+    loadMembers();
     loadPayouts();
 }
+
+async function loadPartnerRequests() {
+    const res = await fetch('/api/admin/partner-requests');
+    const reqs = await res.json();
+    const body = document.getElementById('partner-reqs-body');
+    if(!reqs.length) { body.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#64748b;">No partner claims.</td></tr>`; return; }
+    body.innerHTML = reqs.map(r => `
+        <tr>
+            <td><b>${r.full_name}</b><br><small>@${r.username} (${r.phone})</small></td>
+            <td><b>₦${r.amount.toLocaleString()}</b></td>
+            <td>${r.reference_note}</td>
+            <td>
+                ${r.status === 'pending' ? `
+                    <button class="btn-act btn-app" onclick="actPartnerReq(${r.id}, 'approve')">Approve CPN Partner</button>
+                    <button class="btn-act btn-rej" onclick="actPartnerReq(${r.id}, 'reject')">Reject</button>
+                ` : `<b>${r.status.toUpperCase()}</b>`}
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function actPartnerReq(id, action) {
+    const res = await fetch('/api/admin/partner-requests', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({request_id: id, action: action})
+    });
+    const data = await res.json();
+    alert(data.message);
+    loadAdmin();
+}
+
+async function loadMembers() {
+    const res = await fetch('/api/admin/users');
+    const users = await res.json();
+    const body = document.getElementById('members-body');
+    body.innerHTML = users.map(u => `
+        <tr>
+            <td><b>${u.full_name}</b></td>
+            <td>@${u.username}</td>
+            <td>${u.phone}</td>
+            <td><b>${u.user_type}</b></td>
+            <td>
+                ${u.user_type !== 'Admin' ? `<button class="btn-act btn-del" onclick="deleteMember(${u.id})">Delete Member</button>` : 'System Admin'}
+            </td>
+        </tr>
+    `).join('');
+}
+
+async function deleteMember(uid) {
+    if(!confirm('Are you sure you want to completely remove this member?')) return;
+    const res = await fetch(`/api/admin/users?user_id=${uid}`, {method:'DELETE'});
+    const data = await res.json();
+    alert(data.message);
+    loadAdmin();
+}
+
 async function loadPayouts() {
     const res = await fetch('/api/admin/payouts');
     const payouts = await res.json();
@@ -2049,13 +2411,14 @@ async function loadPayouts() {
             <td>${p.bank_name}<br><small>${p.account_number} (${p.account_name})</small></td>
             <td>
                 ${p.status === 'pending' ? `
-                    <button class="btn-act btn-app" onclick="updatePayout(${p.id}, 'approved')">Approve</button>
+                    <button class="btn-act btn-app" onclick="updatePayout(${p.id}, 'approved')">Approve Cashout</button>
                     <button class="btn-act btn-rej" onclick="updatePayout(${p.id}, 'rejected')">Reject</button>
                 ` : `<b>${p.status.toUpperCase()}</b>`}
             </td>
         </tr>
     `).join('');
 }
+
 async function updatePayout(id, status) {
     await fetch('/api/admin/payouts', {
         method:'POST',
@@ -2064,6 +2427,7 @@ async function updatePayout(id, status) {
     });
     loadPayouts();
 }
+
 loadAdmin();
 </script>
 </body>
