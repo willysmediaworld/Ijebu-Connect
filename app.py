@@ -3,6 +3,7 @@ import sqlite3
 import random
 import string
 import requests
+from datetime import datetime
 
 try:
     from dotenv import load_dotenv
@@ -12,9 +13,10 @@ except ImportError:
 
 from flask import (
     Flask, render_template_string, request, jsonify,
-    g, session, redirect
+    g, session, redirect, url_for
 )
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 
 # =============================================================================
 # CONFIGURATION
@@ -27,7 +29,16 @@ CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', 'willysmediaworld@gmail.com')
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or 'ijebu_connect_secret_key_2026_secured'
-app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024  # 10 MB max limit
+
+# Static Upload Setup
+UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static', 'uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 # =============================================================================
@@ -59,6 +70,13 @@ def query_param():
 def generate_ref_code():
     return 'CPN' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
 
+def safe_add_column(cursor, table, column, col_type):
+    """Safely adds missing columns to existing tables for SQLite/Postgres."""
+    try:
+        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+    except Exception:
+        pass
+
 def init_db():
     with app.app_context():
         db = get_db()
@@ -68,6 +86,7 @@ def init_db():
         is_postgres = bool(DATABASE_URL)
         pk_type = "SERIAL PRIMARY KEY" if is_postgres else "INTEGER PRIMARY KEY AUTOINCREMENT"
 
+        # USERS TABLE (Supports Social, Market, Dating, Beauty, Jobs)
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS users (
                 id {pk_type},
@@ -80,10 +99,23 @@ def init_db():
                 referred_by TEXT DEFAULT NULL,
                 wallet_balance REAL DEFAULT 0.0,
                 is_verified_merchant INTEGER DEFAULT 0,
+                age INTEGER DEFAULT 18,
+                gender TEXT DEFAULT 'Unspecified',
+                relationship_intent TEXT DEFAULT 'Networking',
+                bio TEXT DEFAULT '',
+                occupation TEXT DEFAULT '',
+                is_dating_active INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        safe_add_column(cursor, 'users', 'age', 'INTEGER DEFAULT 18')
+        safe_add_column(cursor, 'users', 'gender', "TEXT DEFAULT 'Unspecified'")
+        safe_add_column(cursor, 'users', 'relationship_intent', "TEXT DEFAULT 'Networking'")
+        safe_add_column(cursor, 'users', 'bio', "TEXT DEFAULT ''")
+        safe_add_column(cursor, 'users', 'occupation', "TEXT DEFAULT ''")
+        safe_add_column(cursor, 'users', 'is_dating_active', 'INTEGER DEFAULT 0')
 
+        # PRODUCTS / MARKETPLACE / SERVICES / JOBS TABLE
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS products (
                 id {pk_type},
@@ -95,22 +127,28 @@ def init_db():
                 image_url TEXT DEFAULT '',
                 location TEXT DEFAULT 'Ijebu Connect',
                 whatsapp_number TEXT NOT NULL,
+                listing_type TEXT DEFAULT 'Market',
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        safe_add_column(cursor, 'products', 'image_url', "TEXT DEFAULT ''")
+        safe_add_column(cursor, 'products', 'listing_type', "TEXT DEFAULT 'Market'")
 
+        # POSTS / EVENTS TABLE
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS posts (
                 id {pk_type},
                 user_id INTEGER NOT NULL,
                 content TEXT NOT NULL,
-                post_type TEXT DEFAULT 'Community News',
+                post_type TEXT DEFAULT 'Social',
                 image_url TEXT DEFAULT '',
                 likes_count INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+        safe_add_column(cursor, 'posts', 'image_url', "TEXT DEFAULT ''")
+        safe_add_column(cursor, 'posts', 'post_type', "TEXT DEFAULT 'Social'")
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS post_likes (
@@ -119,28 +157,6 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(post_id, user_id)
-            )
-        ''')
-
-        cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS comments (
-                id {pk_type},
-                post_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                parent_id INTEGER DEFAULT NULL,
-                content TEXT NOT NULL,
-                likes_count INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-
-        cursor.execute(f'''
-            CREATE TABLE IF NOT EXISTS comment_likes (
-                id {pk_type},
-                comment_id INTEGER NOT NULL,
-                user_id INTEGER NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(comment_id, user_id)
             )
         ''')
 
@@ -189,17 +205,10 @@ def init_db():
             )
         ''')
 
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_uname ON users(username)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_ref   ON users(referral_code)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_user  ON posts(user_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_msg_pair    ON messages(sender_id, receiver_id)")
-        cursor.execute("CREATE INDEX IF NOT EXISTS idx_msg_recv    ON messages(receiver_id, is_read)")
-
         db.commit()
 
         # =====================================================================
-        # ADMIN SEED (Pre-configured Credentials)
+        # ADMIN SEEDING (Configured Admin Account)
         # =====================================================================
         admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect').lower()
         admin_password = os.environ.get('ADMIN_SEED_PASSWORD', 'Rotimi1972connect')
@@ -237,6 +246,34 @@ def init_db():
 
 with app.app_context():
     init_db()
+
+
+# =============================================================================
+# FILE UPLOADER API
+# =============================================================================
+
+@app.route('/api/upload', methods=['POST'])
+def upload_image():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': 'No image file submitted.'}), 400
+        
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'success': False, 'message': 'No file selected.'}), 400
+        
+    if file and allowed_file(file.filename):
+        ext = file.filename.rsplit('.', 1)[1].lower()
+        filename = f"img_{session['user_id']}_{''.join(random.choices(string.ascii_lowercase + string.digits, k=10))}.{ext}"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(filepath)
+        
+        url = f"/static/uploads/{filename}"
+        return jsonify({'success': True, 'image_url': url})
+        
+    return jsonify({'success': False, 'message': 'Allowed types: PNG, JPG, JPEG, GIF, WEBP'}), 400
 
 
 # =============================================================================
@@ -377,7 +414,8 @@ def get_current_user():
         cursor = db.cursor()
         p = query_param()
         cursor.execute(
-            f'''SELECT id, full_name, username, user_type, referral_code, wallet_balance, is_verified_merchant
+            f'''SELECT id, full_name, username, user_type, referral_code, wallet_balance, is_verified_merchant,
+                       age, gender, relationship_intent, bio, occupation, is_dating_active
                 FROM users WHERE id = {p}''',
             (session['user_id'],)
         )
@@ -488,7 +526,7 @@ def request_payout():
 
 
 # =============================================================================
-# MARKETPLACE
+# MULTI-PILLAR API (MARKET, BEAUTY, JOBS, DATING, EVENTS)
 # =============================================================================
 
 @app.route('/api/products', methods=['GET', 'POST'])
@@ -506,43 +544,47 @@ def handle_products():
         if not me or me['user_type'] not in ('CPN Partner', 'Admin'):
             return jsonify({
                 'success': False,
-                'message': 'You must be a CPN Partner to list items for sale. Please upgrade first.',
+                'message': 'You must be a CPN Partner to list on Ijebu Hub. Please upgrade first.',
                 'requires_upgrade': True
             }), 403
 
         data = request.json or {}
         title = data.get('title', '').strip()
         category = data.get('category', 'General')
+        listing_type = data.get('listing_type', 'Market') # Market, Beauty, Jobs, Services
         try:
             price = float(data.get('price', 0))
         except (ValueError, TypeError):
             price = 0.0
         description = data.get('description', '').strip()
         whatsapp = data.get('whatsapp_number', '').strip()
+        image_url = data.get('image_url', '').strip()
 
-        if not title or price <= 0 or not whatsapp:
-            return jsonify({'success': False, 'message': 'Title, price, and WhatsApp contact required.'}), 400
+        if not title or not whatsapp:
+            return jsonify({'success': False, 'message': 'Title and WhatsApp contact required.'}), 400
 
         cursor.execute(
-            f'''INSERT INTO products (user_id, title, category, price, description, whatsapp_number)
-                VALUES ({p}, {p}, {p}, {p}, {p}, {p})''',
-            (session['user_id'], title, category, price, description, whatsapp)
+            f'''INSERT INTO products (user_id, title, category, price, description, whatsapp_number, image_url, listing_type)
+                VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})''',
+            (session['user_id'], title, category, price, description, whatsapp, image_url, listing_type)
         )
         db.commit()
-        return jsonify({'success': True, 'message': 'Product published on Ijebu Market Hub!'})
+        return jsonify({'success': True, 'message': f'Listing published on Ijebu {listing_type} Hub!'})
 
     q = request.args.get('q', '').strip().lower()
-    sql = '''
+    listing_type = request.args.get('type', 'Market').strip()
+    
+    sql = f'''
         SELECT p.*, u.full_name AS seller_name, u.username AS seller_username,
                u.is_verified_merchant, u.user_type
         FROM products p
         JOIN users u ON p.user_id = u.id
-        WHERE p.status = 'active'
+        WHERE p.status = 'active' AND p.listing_type = {p}
     '''
-    params = []
+    params = [listing_type]
     if q:
-        sql += f" AND (LOWER(p.title) LIKE {p} OR LOWER(p.description) LIKE {p})"
-        params.extend([f"%{q}%", f"%{q}%"])
+        sql += f" AND (LOWER(p.title) LIKE {p} OR LOWER(p.description) LIKE {p} OR LOWER(p.category) LIKE {p})"
+        params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
 
     sql += ' ORDER BY p.id DESC'
     cursor.execute(sql, tuple(params))
@@ -555,8 +597,60 @@ def handle_products():
     return jsonify(result)
 
 
+# DATING API
+@app.route('/api/dating/profile', methods=['POST'])
+def update_dating_profile():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    data = request.json or {}
+    age = int(data.get('age', 18))
+    gender = data.get('gender', 'Male')
+    intent = data.get('relationship_intent', 'Dating')
+    bio = data.get('bio', '').strip()
+    occupation = data.get('occupation', '').strip()
+    is_active = 1 if data.get('is_dating_active') else 0
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    cursor.execute(
+        f'''UPDATE users 
+            SET age={p}, gender={p}, relationship_intent={p}, bio={p}, occupation={p}, is_dating_active={p}
+            WHERE id={p}''',
+        (age, gender, intent, bio, occupation, is_active, session['user_id'])
+    )
+    db.commit()
+    return jsonify({'success': True, 'message': 'Dating profile updated!'})
+
+
+@app.route('/api/dating/matches', methods=['GET'])
+def get_dating_matches():
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    
+    current_uid = session.get('user_id') or 0
+    gender_filter = request.args.get('gender', '').strip()
+
+    sql = f'''
+        SELECT id, full_name, username, user_type, age, gender, 
+               relationship_intent, bio, occupation, created_at
+        FROM users 
+        WHERE is_dating_active = 1 AND id != {p}
+    '''
+    params = [current_uid]
+
+    if gender_filter and gender_filter != 'All':
+        sql += f" AND gender = {p}"
+        params.append(gender_filter)
+
+    sql += " ORDER BY id DESC LIMIT 50"
+    cursor.execute(sql, tuple(params))
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+
 # =============================================================================
-# SOCIAL FEED
+# SOCIAL FEED & EVENTS
 # =============================================================================
 
 @app.route('/api/posts', methods=['GET', 'POST'])
@@ -572,32 +666,35 @@ def handle_posts():
         data = request.json or {}
         content = (data.get('content') or '').strip()
         image_url = (data.get('image_url') or '').strip()
+        post_type = (data.get('post_type') or 'Social').strip()
 
         if not content and not image_url:
             return jsonify({'success': False, 'message': 'Write something or attach an image.'}), 400
 
         cursor.execute(
-            f"INSERT INTO posts (user_id, content, image_url) VALUES ({p}, {p}, {p})",
-            (session['user_id'], content, image_url)
+            f"INSERT INTO posts (user_id, content, image_url, post_type) VALUES ({p}, {p}, {p}, {p})",
+            (session['user_id'], content, image_url, post_type)
         )
         db.commit()
-        return jsonify({'success': True, 'message': 'Published to community feed!'})
+        return jsonify({'success': True, 'message': 'Published successfully!'})
 
     current_uid = session.get('user_id') or 0
+    post_type_filter = request.args.get('type', 'Social')
+
     cursor.execute(
         f'''
         SELECT p.id, p.user_id, p.content, p.post_type, p.image_url, p.created_at,
                u.full_name, u.username, u.user_type, u.is_verified_merchant,
                (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
-               (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments_count,
                CASE WHEN EXISTS (
                    SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}
                ) THEN 1 ELSE 0 END AS liked_by_me
         FROM posts p
         JOIN users u ON p.user_id = u.id
+        WHERE p.post_type = {p}
         ORDER BY p.id DESC LIMIT 60
         ''',
-        (current_uid,)
+        (current_uid, post_type_filter)
     )
     return jsonify([dict(r) for r in cursor.fetchall()])
 
@@ -627,75 +724,6 @@ def toggle_post_like(post_id):
     return jsonify({'success': True, 'liked': liked, 'likes_count': cursor.fetchone()[0]})
 
 
-@app.route('/api/posts/<int:post_id>', methods=['DELETE'])
-def delete_post(post_id):
-    if 'user_id' not in session:
-        return jsonify({'success': False, 'message': 'Login required.'}), 401
-
-    db = get_db()
-    cursor = db.cursor()
-    p = query_param()
-    uid = session['user_id']
-
-    cursor.execute(f"SELECT user_id FROM posts WHERE id = {p}", (post_id,))
-    post = cursor.fetchone()
-    if not post:
-        return jsonify({'success': False, 'message': 'Post not found.'}), 404
-
-    cursor.execute(f"SELECT user_type FROM users WHERE id = {p}", (uid,))
-    me = cursor.fetchone()
-    if post['user_id'] != uid and me['user_type'] != 'Admin':
-        return jsonify({'success': False, 'message': 'Unauthorized.'}), 403
-
-    cursor.execute(f"DELETE FROM comments WHERE post_id = {p}", (post_id,))
-    cursor.execute(f"DELETE FROM post_likes WHERE post_id = {p}", (post_id,))
-    cursor.execute(f"DELETE FROM posts WHERE id = {p}", (post_id,))
-    db.commit()
-    return jsonify({'success': True, 'message': 'Post deleted.'})
-
-
-@app.route('/api/posts/<int:post_id>/comments', methods=['GET', 'POST'])
-def post_comments(post_id):
-    db = get_db()
-    cursor = db.cursor()
-    p = query_param()
-
-    if request.method == 'POST':
-        if 'user_id' not in session:
-            return jsonify({'success': False, 'message': 'Login required.'}), 401
-
-        data = request.json or {}
-        content = (data.get('content') or '').strip()
-        parent_id = data.get('parent_id')
-
-        if not content:
-            return jsonify({'success': False, 'message': 'Comment cannot be empty.'}), 400
-
-        cursor.execute(
-            f"INSERT INTO comments (post_id, user_id, parent_id, content) VALUES ({p}, {p}, {p}, {p})",
-            (post_id, session['user_id'], parent_id, content)
-        )
-        db.commit()
-        return jsonify({'success': True, 'message': 'Comment posted!'})
-
-    current_uid = session.get('user_id') or 0
-    cursor.execute(
-        f'''
-        SELECT c.id, c.post_id, c.user_id, c.parent_id, c.content, c.created_at,
-               u.full_name, u.username, u.user_type,
-               (SELECT COUNT(*) FROM comment_likes cl WHERE cl.comment_id = c.id) AS likes_count,
-               CASE WHEN EXISTS (
-                   SELECT 1 FROM comment_likes cl WHERE cl.comment_id = c.id AND cl.user_id = {p}
-               ) THEN 1 ELSE 0 END AS liked_by_me
-        FROM comments c
-        JOIN users u ON c.user_id = u.id
-        WHERE c.post_id = {p} ORDER BY c.id ASC
-        ''',
-        (current_uid, post_id)
-    )
-    return jsonify([dict(r) for r in cursor.fetchall()])
-
-
 # =============================================================================
 # PUBLIC MEMBER PROFILE & WALL
 # =============================================================================
@@ -707,8 +735,8 @@ def get_user_profile(username):
     p = query_param()
 
     cursor.execute(
-        f'''SELECT id, full_name, username, user_type, referral_code,
-                   wallet_balance, is_verified_merchant, created_at
+        f'''SELECT id, full_name, username, user_type, referral_code, wallet_balance, 
+                   is_verified_merchant, age, gender, relationship_intent, bio, occupation, created_at
             FROM users WHERE LOWER(username) = {p}''',
         (username.lower(),)
     )
@@ -727,7 +755,6 @@ def get_user_profile(username):
         SELECT p.id, p.user_id, p.content, p.post_type, p.image_url, p.created_at,
                u.full_name, u.username, u.user_type, u.is_verified_merchant,
                (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
-               (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments_count,
                CASE WHEN EXISTS (
                    SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}
                ) THEN 1 ELSE 0 END AS liked_by_me
@@ -852,25 +879,9 @@ def chat_thread(username):
         content = (data.get('content') or '').strip()
         if not content:
             return jsonify({'success': False, 'message': 'Message cannot be empty.'}), 400
-        if len(content) > 2000:
-            return jsonify({'success': False, 'message': 'Message too long (max 2000 chars).'}), 400
 
         if _is_blocked(cursor, p, uid, other_id) or _is_blocked(cursor, p, other_id, uid):
             return jsonify({'success': False, 'message': 'Cannot send message.'}), 403
-
-        if DATABASE_URL:
-            cursor.execute(
-                f"SELECT COUNT(*) FROM messages WHERE sender_id = {p} AND created_at > NOW() - INTERVAL '1 day'",
-                (uid,)
-            )
-        else:
-            cursor.execute(
-                f"SELECT COUNT(*) FROM messages WHERE sender_id = {p} AND created_at > datetime('now','-1 day')",
-                (uid,)
-            )
-        daily = cursor.fetchone()[0]
-        if daily >= 200:
-            return jsonify({'success': False, 'message': 'Daily message limit reached.'}), 429
 
         cursor.execute(
             f"INSERT INTO messages (sender_id, receiver_id, content) VALUES ({p}, {p}, {p})",
@@ -909,8 +920,6 @@ def block_user(username):
     other = cursor.fetchone()
     if not other:
         return jsonify({'success': False, 'message': 'User not found.'}), 404
-    if other['id'] == uid:
-        return jsonify({'success': False, 'message': 'Cannot block yourself.'}), 400
 
     cursor.execute(
         f"SELECT id FROM blocked_users WHERE blocker_id = {p} AND blocked_id = {p}",
@@ -947,7 +956,7 @@ def get_admin_overview():
     total_users = cursor.fetchone()[0]
     cursor.execute("SELECT COUNT(*) FROM users WHERE user_type = 'CPN Partner'")
     total_partners = cursor.fetchone()[0]
-    cursor.execute("SELECT COUNT(*) FROM products WHERE status = 'active'")
+    cursor.execute("SELECT COUNT(*) FROM products")
     total_products = cursor.fetchone()[0]
     cursor.execute("SELECT COALESCE(SUM(wallet_balance), 0) FROM users")
     total_wallets = float(cursor.fetchone()[0] or 0)
@@ -1007,7 +1016,7 @@ INDEX_TEMPLATE = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ijebu Connect Network</title>
+<title>Ijebu Connect - Connect. Discover. Trade. Belong.</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
@@ -1027,21 +1036,23 @@ INDEX_TEMPLATE = r"""
 	.toast { background: var(--navy-blue); color: #fff; padding: 12px 18px; border-radius: 10px; margin-bottom: 8px; box-shadow: 0 8px 20px rgba(0,0,0,.15); font-size: 0.88rem; font-weight: 600; }
 	.toast.success { background: var(--emerald-green); } .toast.error { background: #ef4444; }
 	
-	header { background: #fff; padding: 0.85rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid var(--border-light); position: sticky; top:0; z-index: 100; }
-	.brand-box { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+	header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid var(--border-light); position: sticky; top:0; z-index: 100; }
+	.brand-box { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+    .brand-logo-img { height: 42px; width: auto; object-fit: contain; }
 	.brand-title { font-size: 1.05rem; font-weight: 800; color: var(--navy-blue); line-height:1.1; }
 	.brand-title span { color: var(--emerald-green); }
 	
 	.header-auth { display: flex; align-items: center; gap: 6px; }
 	.btn-header-login { background: var(--navy-blue); color: #fff; text-decoration: none; padding: 7px 14px; border-radius: 20px; font-weight: 700; font-size: 0.78rem; }
-	.header-user-pill { background: #f1f5f9; color: var(--navy-blue); padding: 6px 10px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; cursor: pointer; border: none; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+	.header-user-pill { background: #f1f5f9; color: var(--navy-blue); padding: 6px 10px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; cursor: pointer; border: none; max-width:120px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 	.header-logout-btn { background: #ef4444; color: #fff; border: none; padding: 6px 10px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; cursor: pointer; }
 	
-	.top-nav-pills { display: flex; gap: 6px; padding: 0.85rem 1rem 0.2rem; max-width: 600px; margin: 0 auto; width: 100%; flex-wrap: wrap; }
-	.nav-pill { padding: 9px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 700; background: #fff; border: 1.5px solid var(--border-light); color: var(--text-muted); cursor: pointer; flex: 1; min-width: 0; text-align: center; position: relative; }
+	.top-nav-pills { display: flex; gap: 4px; padding: 0.75rem 0.5rem 0.2rem; max-width: 680px; margin: 0 auto; width: 100%; overflow-x: auto; scrollbar-width: none; }
+    .top-nav-pills::-webkit-scrollbar { display: none; }
+	.nav-pill { padding: 8px 12px; border-radius: 20px; font-size: 0.76rem; font-weight: 700; background: #fff; border: 1.5px solid var(--border-light); color: var(--text-muted); cursor: pointer; flex-shrink: 0; text-align: center; position: relative; display: flex; align-items: center; gap: 5px; }
 	.nav-pill.active { background: var(--navy-blue); color: #fff; border-color: var(--navy-blue); }
 	
-	.app-container { max-width: 600px; margin: 0 auto; width: 100%; padding: 0.5rem 1rem 2rem; flex: 1; }
+	.app-container { max-width: 620px; margin: 0 auto; width: 100%; padding: 0.5rem 1rem 2rem; flex: 1; }
 	.view-section { display: none; } .view-section.active { display: block; }
 	
 	.card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 16px; padding: 1.25rem; margin-bottom: 0.85rem; }
@@ -1058,47 +1069,39 @@ INDEX_TEMPLATE = r"""
 	
 	.feed-post { background: #fff; border: 1.5px solid var(--border-light); border-radius: 16px; padding: 1rem; margin-bottom: 0.85rem; }
 	.post-header { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 8px; }
-	.avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 0.9rem; flex-shrink: 0; cursor: pointer; }
+	.avatar { width: 42px; height: 42px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 0.95rem; flex-shrink: 0; cursor: pointer; }
 	.post-author { font-size: 0.92rem; }
 	.post-meta { font-size: 0.72rem; color: var(--text-muted); }
-.post-content { font-size: 0.92rem; line-height: 1.5; white-space: pre-wrap; margin-bottom: 8px; }
-.post-actions { display: flex; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border-light); }
-.post-action { flex: 1; background: none; border: none; padding: 8px; border-radius: 8px; font-size: 0.82rem; font-weight: 700; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
-.post-action.liked { color: #ef4444; }
+	.post-content { font-size: 0.92rem; line-height: 1.5; white-space: pre-wrap; margin-bottom: 8px; }
+    .post-img { width: 100%; max-height: 300px; object-fit: cover; border-radius: 12px; margin-bottom: 8px; }
+	.post-actions { display: flex; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border-light); }
+	.post-action { flex: 1; background: none; border: none; padding: 8px; border-radius: 8px; font-size: 0.82rem; font-weight: 700; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
+	.post-action.liked { color: #ef4444; }
 
-.product-card { display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--border-light); padding-bottom: 12px; margin-bottom: 12px; }
-.product-card:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
-.product-img-box { width: 64px; height: 64px; border-radius: 12px; background: #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: #0f172a; flex-shrink: 0; }
-.btn-whatsapp { background: #25d366; color: #fff; border: none; padding: 8px 14px; border-radius: 10px; font-weight: 700; font-size: 0.8rem; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
+	.product-card { display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--border-light); padding-bottom: 12px; margin-bottom: 12px; }
+	.product-card:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+	.product-img-box { width: 72px; height: 72px; border-radius: 12px; background: #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: #0f172a; flex-shrink: 0; overflow: hidden; }
+    .product-img-box img { width: 100%; height: 100%; object-fit: cover; }
+	.btn-whatsapp { background: #25d366; color: #fff; border: none; padding: 8px 14px; border-radius: 10px; font-weight: 700; font-size: 0.8rem; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
 
-.profile-hero { background: var(--navy-blue); color: #fff; border-radius: 18px; padding: 1.5rem 1.25rem; margin-bottom: 1rem; text-align: center; }
-.profile-avatar { width: 72px; height: 72px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.6rem; margin: 0 auto 10px; border: 3px solid rgba(255,255,255,0.2); }
-.profile-name { font-size: 1.2rem; font-weight: 800; }
+	.dating-card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 16px; padding: 1rem; margin-bottom: 0.85rem; display: flex; gap: 12px; align-items: center; }
+	
+	.profile-hero { background: var(--navy-blue); color: #fff; border-radius: 18px; padding: 1.5rem 1.25rem; margin-bottom: 1rem; text-align: center; }
+	.profile-avatar { width: 76px; height: 72px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.6rem; margin: 0 auto 10px; border: 3px solid rgba(255,255,255,0.2); }
+	.profile-name { font-size: 1.2rem; font-weight: 800; }
 
-.cpn-wallet-card { background: linear-gradient(135deg, #0b1e36, #1e3a8a); color: #fff; border-radius: 18px; padding: 1.25rem; margin-bottom: 1rem; }
-.cpn-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; margin-bottom: 10px; }
-.val-gold { color: #f59e0b; font-weight: 800; font-size: 1.3rem; }
+	.cpn-wallet-card { background: linear-gradient(135deg, #0b1e36, #1e3a8a); color: #fff; border-radius: 18px; padding: 1.25rem; margin-bottom: 1rem; }
+	.cpn-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.88rem; margin-bottom: 10px; }
+	.val-gold { color: #f59e0b; font-weight: 800; font-size: 1.3rem; }
 
-.profile-stats { display: flex; gap: 8px; margin-bottom: 1rem; }
-.profile-stat { flex: 1; background: #fff; border: 1.5px solid var(--border-light); border-radius: 14px; padding: 12px; text-align: center; }
-.profile-stat-val { font-size: 1.3rem; font-weight: 800; color: var(--navy-blue); }
-.profile-stat-lbl { font-size: 0.7rem; color: var(--text-muted); font-weight: 700; text-transform: uppercase; }
+	.chat-bubble { max-width:75%; padding:10px 14px; border-radius:16px; margin-bottom:8px; font-size:0.9rem; line-height:1.4; word-wrap:break-word; }
+	.chat-bubble.me { background:var(--emerald-green); color:#fff; margin-left:auto; border-bottom-right-radius:4px; }
+	.chat-bubble.them { background:#fff; border:1.5px solid var(--border-light); border-bottom-left-radius:4px; }
+	.chat-time { font-size:0.65rem; opacity:0.7; margin-top:3px; }
+	.chat-partner-row { display:flex; gap:12px; align-items:center; padding:12px; border-bottom:1px solid var(--border-light); cursor:pointer; }
 
-.profile-tabs { display: flex; gap: 6px; margin-bottom: 1rem; }
-.profile-tab { flex: 1; padding: 10px; border-radius: 10px; border: 1.5px solid var(--border-light); background: #fff; color: var(--text-muted); font-weight: 700; font-size: 0.82rem; cursor: pointer; }
-.profile-tab.active { background: var(--navy-blue); color: #fff; border-color: var(--navy-blue); }
-
-.chat-bubble { max-width:75%; padding:10px 14px; border-radius:16px; margin-bottom:8px; font-size:0.9rem; line-height:1.4; word-wrap:break-word; }
-.chat-bubble.me { background:var(--emerald-green); color:#fff; margin-left:auto; border-bottom-right-radius:4px; }
-.chat-bubble.them { background:#fff; border:1.5px solid var(--border-light); border-bottom-left-radius:4px; }
-.chat-time { font-size:0.65rem; opacity:0.7; margin-top:3px; }
-.chat-partner-row { display:flex; gap:12px; align-items:center; padding:12px; border-bottom:1px solid var(--border-light); cursor:pointer; }
-.chat-partner-row:hover { background:#f8fafc; }
-.chat-unread-dot { background:#ef4444; color:#fff; font-size:0.7rem; font-weight:800; padding:3px 8px; border-radius:10px; }
-
-footer { background: #fff; text-align: center; padding: 1.5rem 1rem; font-size: 0.82rem; color: var(--text-muted); border-top: 1.5px solid var(--border-light); margin-top: auto; line-height: 1.6; }
-footer a { color: var(--emerald-green); text-decoration: none; font-weight: 700; }
-footer a:hover { text-decoration: underline; }
+	footer { background: #fff; text-align: center; padding: 1.5rem 1rem; font-size: 0.82rem; color: var(--text-muted); border-top: 1.5px solid var(--border-light); margin-top: auto; line-height: 1.6; }
+	footer a { color: var(--emerald-green); text-decoration: none; font-weight: 700; }
 </style>
 </head>
 <body>
@@ -1107,48 +1110,105 @@ footer a:hover { text-decoration: underline; }
 
 <header>
     <div class="brand-box" onclick="switchNav('feed')">
+        <img src="/static/logo.png" alt="Ijebu Connect Logo" class="brand-logo-img" onerror="this.style.display='none'">
         <div class="brand-title">IJEBU<br><span>CONNECT</span></div>
     </div>
     <div class="header-auth" id="header-auth"></div>
 </header>
 
 <div class="top-nav-pills">
-    <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')">📰 Feed</div>
-    <div class="nav-pill" data-nav="market" onclick="switchNav('market')">🛒 Market</div>
+    <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-users"></i> Social</div>
+    <div class="nav-pill" data-nav="market" onclick="switchNav('market')"><i class="fa-solid fa-cart-shopping"></i> Market</div>
+    <div class="nav-pill" data-nav="dating" onclick="switchNav('dating')"><i class="fa-solid fa-heart" style="color:#ef4444;"></i> Dating</div>
+    <div class="nav-pill" data-nav="beauty" onclick="switchNav('beauty')"><i class="fa-solid fa-scissors" style="color:#d97706;"></i> Beauty</div>
+    <div class="nav-pill" data-nav="jobs" onclick="switchNav('jobs')"><i class="fa-solid fa-briefcase" style="color:#2563eb;"></i> Jobs/Services</div>
+    <div class="nav-pill" data-nav="events" onclick="switchNav('events')"><i class="fa-solid fa-calendar-days" style="color:#9333ea;"></i> Events</div>
     <div class="nav-pill" data-nav="chat" onclick="switchNav('chat')">
-        💬 Chat
+        <i class="fa-solid fa-comments"></i> Chat
         <span id="chat-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;font-size:0.65rem;font-weight:800;padding:2px 6px;border-radius:10px;">0</span>
     </div>
-    <div class="nav-pill" id="admin-pill" style="display:none;" onclick="window.location.href='/admin'">⚙️ Admin</div>
+    <div class="nav-pill" id="admin-pill" style="display:none;" onclick="window.location.href='/admin'"><i class="fa-solid fa-gear"></i> Admin</div>
 </div>
 
 <div class="app-container">
 
+    <!-- SOCIAL FEED -->
     <div id="view-feed" class="view-section active">
         <div class="card">
-            <form onsubmit="handlePostSubmit(event)">
+            <form onsubmit="handlePostSubmit(event, 'Social')">
                 <div class="form-group">
-                    <textarea class="form-control" id="post-content" rows="2" placeholder="Share community news, updates, or announcements..."></textarea>
+                    <textarea class="form-control" id="post-content" rows="2" placeholder="Share community news, local updates, or stories..."></textarea>
                 </div>
-                <button type="submit" class="btn-submit" style="background:var(--navy-blue);">Publish Update</button>
+                <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+                    <input type="file" id="post-file-input" class="form-control" accept="image/*" style="padding:6px;">
+                </div>
+                <button type="submit" class="btn-submit" style="background:var(--navy-blue);">Publish Post</button>
             </form>
         </div>
         <div id="feed-posts-container"></div>
     </div>
 
+    <!-- MARKETPLACE HUB -->
     <div id="view-market" class="view-section">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-            <h3 style="font-weight:800;color:var(--navy-blue);">Market Hub</h3>
-            <button onclick="startSellItem()" style="background:var(--emerald-green);color:#fff;border:none;padding:8px 14px;border-radius:10px;font-weight:700;font-size:0.82rem;cursor:pointer;">
-                + Sell Item
+            <h3 style="font-weight:800;color:var(--navy-blue);">Marketplace</h3>
+            <button onclick="startSellItem('Market')" style="background:var(--emerald-green);color:#fff;border:none;padding:8px 14px;border-radius:10px;font-weight:700;font-size:0.82rem;cursor:pointer;">
+                + List Item
             </button>
         </div>
         <div class="card" style="padding:0.75rem;margin-bottom:1rem;">
-            <input type="text" class="form-control" id="market-search" placeholder="Search farm produce, land, electronics..." onkeyup="loadProducts()">
+            <input type="text" class="form-control" id="market-search" placeholder="Search produce, land, electronics..." onkeyup="loadCategoryListings('Market', 'products-container')">
         </div>
         <div id="products-container" class="card"></div>
     </div>
 
+    <!-- DATING & MATCHMAKING -->
+    <div id="view-dating" class="view-section">
+        <div class="card" style="background:linear-gradient(135deg, #4f46e5, #7c3aed);color:#fff;">
+            <h3 style="font-weight:800;margin-bottom:4px;">❤️ Ijebu Singles &amp; Match</h3>
+            <p style="font-size:0.8rem;opacity:0.9;margin-bottom:10px;">Connect with verified singles across Ijebu Ode, Sagamu, Remo &amp; environs.</p>
+            <button onclick="openDatingSettingsModal()" style="background:#fff;color:#4f46e5;border:none;padding:8px 14px;border-radius:10px;font-weight:800;font-size:0.8rem;cursor:pointer;">Set Up My Dating Profile</button>
+        </div>
+        <div id="dating-matches-container"></div>
+    </div>
+
+    <!-- BEAUTY & LIFESTYLE -->
+    <div id="view-beauty" class="view-section">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <h3 style="font-weight:800;color:var(--navy-blue);">Beauty &amp; Fashion Directory</h3>
+            <button onclick="startSellItem('Beauty')" style="background:var(--amber-gold);color:#fff;border:none;padding:8px 14px;border-radius:10px;font-weight:700;font-size:0.82rem;cursor:pointer;">
+                + Add Service
+            </button>
+        </div>
+        <div id="beauty-container" class="card"></div>
+    </div>
+
+    <!-- JOBS & SERVICES -->
+    <div id="view-jobs" class="view-section">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+            <h3 style="font-weight:800;color:var(--navy-blue);">Jobs &amp; Artisan Directory</h3>
+            <button onclick="startSellItem('Jobs')" style="background:#2563eb;color:#fff;border:none;padding:8px 14px;border-radius:10px;font-weight:700;font-size:0.82rem;cursor:pointer;">
+                + Post Job/Skill
+            </button>
+        </div>
+        <div id="jobs-container" class="card"></div>
+    </div>
+
+    <!-- EVENTS -->
+    <div id="view-events" class="view-section">
+        <div class="card">
+            <h3 style="font-weight:800;color:var(--navy-blue);margin-bottom:8px;">📅 Local Events &amp; Parties</h3>
+            <form onsubmit="handlePostSubmit(event, 'Event')">
+                <div class="form-group">
+                    <textarea class="form-control" id="event-content" rows="2" placeholder="Announce an upcoming party, festival, or town hall event..."></textarea>
+                </div>
+                <button type="submit" class="btn-submit" style="background:#9333ea;">Publish Event</button>
+            </form>
+        </div>
+        <div id="events-container"></div>
+    </div>
+
+    <!-- CHAT -->
     <div id="view-chat" class="view-section">
         <div id="chat-list-wrap">
             <h3 style="font-weight:800;color:var(--navy-blue);margin-bottom:12px;">Messages</h3>
@@ -1167,13 +1227,15 @@ footer a:hover { text-decoration: underline; }
         </div>
     </div>
 
+    <!-- PROFILE VIEW -->
     <div id="view-profile" class="view-section">
-        <button onclick="switchNav('feed')" style="background:#fff;border:1.5px solid var(--border-light);padding:6px 14px;border-radius:10px;font-weight:700;font-size:0.8rem;cursor:pointer;margin-bottom:1rem;">← Back to Feed</button>
+        <button onclick="switchNav('feed')" style="background:#fff;border:1.5px solid var(--border-light);padding:6px 14px;border-radius:10px;font-weight:700;font-size:0.8rem;cursor:pointer;margin-bottom:1rem;">← Back</button>
         <div id="profile-wall-container"></div>
     </div>
 
 </div>
 
+<!-- MODALS -->
 <div id="cpn-upgrade-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999;align-items:center;justify-content:center;padding:1rem;">
     <div class="card" style="max-width:440px;width:100%;background:#fff;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
@@ -1181,7 +1243,7 @@ footer a:hover { text-decoration: underline; }
             <button onclick="closeCPNModal()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;">&times;</button>
         </div>
         <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:1rem;line-height:1.5;">
-            To sell items on Ijebu Market Hub, you must register as an official <strong>CPN Partner (₦2,000)</strong>. Unlock unlimited listings and earn <strong>10% Tier-1 &amp; 5% Tier-2 referral rewards</strong> on traders you invite!
+            To list services or products on Ijebu Connect, you must register as an official <strong>CPN Partner (₦2,000)</strong>. Unlock unlimited listings and earn <strong>10% Tier-1 &amp; 5% Tier-2 referral rewards</strong> on traders you invite!
         </p>
         <button class="btn-submit" style="background:var(--amber-gold);" onclick="triggerCPNUpgrade()">Proceed to CPN Partner Upgrade (₦2,000)</button>
     </div>
@@ -1190,38 +1252,79 @@ footer a:hover { text-decoration: underline; }
 <div id="sell-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999;align-items:center;justify-content:center;padding:1rem;">
     <div class="card" style="max-width:480px;width:100%;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
-            <h3 style="font-weight:800;color:var(--navy-blue);">List Market Item</h3>
+            <h3 style="font-weight:800;color:var(--navy-blue);" id="modal-sell-title">Publish Listing</h3>
             <button onclick="closeSellModal()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;">&times;</button>
         </div>
         <form onsubmit="handleProductSubmit(event)">
+            <input type="hidden" id="prod-type" value="Market">
             <div class="form-group">
                 <label>Title</label>
-                <input type="text" class="form-control" id="prod-title" placeholder="e.g. Fresh Palm Oil (25 Liters)" required>
+                <input type="text" class="form-control" id="prod-title" placeholder="e.g. Fresh Palm Oil / Bridal Makeup" required>
             </div>
             <div class="form-group">
                 <label>Category</label>
-                <select class="form-control" id="prod-category">
-                    <option value="Agriculture">Agriculture &amp; Farming</option>
-                    <option value="Real Estate">Land &amp; Property</option>
-                    <option value="Electronics">Electronics &amp; Phones</option>
-                    <option value="Fashion">Fashion &amp; Clothing</option>
-                    <option value="Services">Local Services</option>
-                    <option value="General">General Goods</option>
-                </select>
+                <input type="text" class="form-control" id="prod-category" placeholder="Agriculture, Salons, Plumbing, Phones" required>
             </div>
             <div class="form-group">
-                <label>Price (₦)</label>
-                <input type="number" class="form-control" id="prod-price" placeholder="25000" required>
+                <label>Price or Fee (₦)</label>
+                <input type="number" class="form-control" id="prod-price" placeholder="0 if negotiable" required>
             </div>
             <div class="form-group">
-                <label>WhatsApp Number</label>
+                <label>WhatsApp Contact Number</label>
                 <input type="text" class="form-control" id="prod-whatsapp" placeholder="09018363715" required>
             </div>
             <div class="form-group">
-                <label>Description</label>
-                <textarea class="form-control" id="prod-desc" rows="2" placeholder="Details about quantity, location..."></textarea>
+                <label>Upload Photo</label>
+                <input type="file" id="prod-img-file" class="form-control" accept="image/*">
             </div>
-            <button type="submit" class="btn-submit">Publish Market Item</button>
+            <div class="form-group">
+                <label>Description</label>
+                <textarea class="form-control" id="prod-desc" rows="2" placeholder="Details..."></textarea>
+            </div>
+            <button type="submit" class="btn-submit">Publish Listing</button>
+        </form>
+    </div>
+</div>
+
+<div id="dating-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999;align-items:center;justify-content:center;padding:1rem;">
+    <div class="card" style="max-width:440px;width:100%;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
+            <h3 style="font-weight:800;color:var(--navy-blue);">❤️ Dating Profile Settings</h3>
+            <button onclick="closeDatingModal()" style="background:none;border:none;font-size:1.5rem;cursor:pointer;">&times;</button>
+        </div>
+        <form onsubmit="handleDatingProfileSubmit(event)">
+            <div class="form-group">
+                <label>Age</label>
+                <input type="number" id="dt-age" class="form-control" value="24" required>
+            </div>
+            <div class="form-group">
+                <label>Gender</label>
+                <select id="dt-gender" class="form-control">
+                    <option value="Female">Female</option>
+                    <option value="Male">Male</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Looking For</label>
+                <select id="dt-intent" class="form-control">
+                    <option value="Dating & Relationship">Dating &amp; Relationship</option>
+                    <option value="Marriage">Marriage</option>
+                    <option value="Networking & Friends">Networking &amp; Friends</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>Occupation / Profession</label>
+                <input type="text" id="dt-occupation" class="form-control" placeholder="Entrepreneur, Fashion Designer...">
+            </div>
+            <div class="form-group">
+                <label>Short Bio</label>
+                <textarea id="dt-bio" class="form-control" rows="2" placeholder="Tell singles in Ijebu a little about yourself..."></textarea>
+            </div>
+            <div class="form-group" style="flex-direction:row;align-items:center;gap:8px;">
+                <input type="checkbox" id="dt-active" checked style="width:auto;">
+                <label for="dt-active" style="margin:0;">Show profile on Match Feed</label>
+            </div>
+            <button type="submit" class="btn-submit" style="background:#4f46e5;">Save Profile</button>
         </form>
     </div>
 </div>
@@ -1284,8 +1387,13 @@ function switchNav(target) {
     if(pill) pill.classList.add('active');
     const view = document.getElementById(`view-${target}`);
     if(view) view.classList.add('active');
-    if(target === 'feed') loadPosts();
-    if(target === 'market') loadProducts();
+
+    if(target === 'feed') loadPosts('Social', 'feed-posts-container');
+    if(target === 'market') loadCategoryListings('Market', 'products-container');
+    if(target === 'beauty') loadCategoryListings('Beauty', 'beauty-container');
+    if(target === 'jobs') loadCategoryListings('Jobs', 'jobs-container');
+    if(target === 'events') loadPosts('Event', 'events-container');
+    if(target === 'dating') loadDatingMatches();
     if(target === 'chat') { loadChatPartners(); refreshUnread(); }
 }
 
@@ -1297,7 +1405,7 @@ async function checkSession() {
             currentUser = data.user;
             renderHeaderAuth();
             if(currentUser.user_type === 'Admin') {
-                document.getElementById('admin-pill').style.display = 'block';
+                document.getElementById('admin-pill').style.display = 'flex';
             }
             refreshUnread();
         } else {
@@ -1323,38 +1431,56 @@ async function handleLogout() {
     await fetch('/api/auth/logout', {method:'POST'});
     currentUser = null;
     document.getElementById('admin-pill').style.display = 'none';
-    document.getElementById('chat-badge').style.display = 'none';
     renderHeaderAuth();
     showToast('Logged out.');
     switchNav('feed');
 }
 
-// POSTS
-async function handlePostSubmit(e) {
+// FILE UPLOAD HELPER
+async function uploadSelectedFile(fileInput) {
+    if(!fileInput || !fileInput.files[0]) return '';
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    const res = await fetch('/api/upload', {method:'POST', body: formData});
+    const data = await res.json();
+    return data.success ? data.image_url : '';
+}
+
+// POSTS / SOCIAL / EVENTS
+async function handlePostSubmit(e, postType) {
     e.preventDefault();
     if(!currentUser) return window.location.href = '/auth';
-    const content = document.getElementById('post-content').value.trim();
-    if(!content) return showToast('Please enter post content', 'error');
+    
+    const contentEl = postType === 'Event' ? document.getElementById('event-content') : document.getElementById('post-content');
+    const content = contentEl.value.trim();
+    if(!content) return showToast('Please enter post text', 'error');
+
+    let imageUrl = '';
+    const fileInput = document.getElementById('post-file-input');
+    if(fileInput && fileInput.files[0]) {
+        imageUrl = await uploadSelectedFile(fileInput);
+    }
 
     const res = await fetch('/api/posts', {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({content: content})
+        body: JSON.stringify({content, image_url: imageUrl, post_type: postType})
     });
     const data = await res.json();
     if(data.success) {
         showToast(data.message);
-        document.getElementById('post-content').value = '';
-        loadPosts();
+        contentEl.value = '';
+        if(fileInput) fileInput.value = '';
+        loadPosts(postType, postType === 'Event' ? 'events-container' : 'feed-posts-container');
     } else showToast(data.message, 'error');
 }
 
-async function loadPosts() {
-    const res = await fetch('/api/posts');
+async function loadPosts(postType, containerId) {
+    const res = await fetch(`/api/posts?type=${postType}`);
     const posts = await res.json();
-    const container = document.getElementById('feed-posts-container');
+    const container = document.getElementById(containerId);
     if(!posts.length) {
-        container.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No community posts yet. Be the first to share!</div>`;
+        container.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No posts found.</div>`;
         return;
     }
     container.innerHTML = posts.map(p => renderPostCard(p)).join('');
@@ -1362,6 +1488,7 @@ async function loadPosts() {
 
 function renderPostCard(p) {
     const badge = p.user_type === 'CPN Partner' ? '<span class="badge badge-partner">CPN Partner</span>' : (p.user_type === 'Admin' ? '<span class="badge badge-admin">Admin</span>' : '');
+    const imgHtml = p.image_url ? `<img src="${p.image_url}" class="post-img">` : '';
     return `
         <div class="feed-post">
             <div class="post-header">
@@ -1372,6 +1499,7 @@ function renderPostCard(p) {
                 </div>
             </div>
             <div class="post-content">${p.content}</div>
+            ${imgHtml}
             <div class="post-actions">
                 <button class="post-action ${p.liked_by_me ? 'liked':''}" onclick="toggleLike(${p.id})">❤️ ${p.likes_count}</button>
             </div>
@@ -1382,45 +1510,132 @@ function renderPostCard(p) {
 async function toggleLike(pid) {
     if(!currentUser) return window.location.href = '/auth';
     await fetch(`/api/posts/${pid}/like`, {method:'POST'});
-    loadPosts();
+    loadPosts('Social', 'feed-posts-container');
 }
 
-// MARKETPLACE
-async function loadProducts() {
-    const q = document.getElementById('market-search').value.trim();
-    const res = await fetch(`/api/products?q=${encodeURIComponent(q)}`);
-    const products = await res.json();
-    const container = document.getElementById('products-container');
+// MULTI-PILLAR LISTINGS (MARKET, BEAUTY, JOBS)
+async function loadCategoryListings(listingType, containerId) {
+    const q = (listingType === 'Market') ? document.getElementById('market-search').value.trim() : '';
+    const res = await fetch(`/api/products?type=${listingType}&q=${encodeURIComponent(q)}`);
+    const items = await res.json();
+    const container = document.getElementById(containerId);
 
-    if(!products.length) {
-        container.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:1rem;">No market items found.</div>`;
+    if(!items.length) {
+        container.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:1rem;">No listings found.</div>`;
         return;
     }
 
-    container.innerHTML = products.map(p => `
+    container.innerHTML = items.map(p => `
         <div class="product-card">
-            <div class="product-img-box"><i class="fa-solid fa-store"></i></div>
+            <div class="product-img-box">
+                ${p.image_url ? `<img src="${p.image_url}">` : '<i class="fa-solid fa-store"></i>'}
+            </div>
             <div style="flex:1;">
                 <h4 style="font-weight:800;color:var(--navy-blue);font-size:0.95rem;">${p.title}</h4>
-                <div style="font-weight:800;color:var(--emerald-green);font-size:0.9rem;margin:2px 0;">${formatNaira(p.price)}</div>
-                <div style="font-size:0.75rem;color:var(--text-muted);">Seller: <span class="clickable-user" onclick="openProfile('${p.seller_username}')">@${p.seller_username}</span></div>
+                <div style="font-weight:800;color:var(--emerald-green);font-size:0.9rem;margin:2px 0;">${p.price > 0 ? formatNaira(p.price) : 'Contact for Price'}</div>
+                <div style="font-size:0.75rem;color:var(--text-muted);">${p.category} • By <span class="clickable-user" onclick="openProfile('${p.seller_username}')">@${p.seller_username}</span></div>
             </div>
             <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" class="btn-whatsapp"><i class="fa-brands fa-whatsapp"></i> Chat</a>
         </div>
     `).join('');
 }
 
-function startSellItem() {
+function startSellItem(type = 'Market') {
     if(!currentUser) return window.location.href = '/auth';
     if(currentUser.user_type === 'Resident') {
         document.getElementById('cpn-upgrade-modal').style.display = 'flex';
     } else {
+        document.getElementById('prod-type').value = type;
+        document.getElementById('modal-sell-title').innerText = `List on Ijebu ${type}`;
         document.getElementById('sell-modal').style.display = 'flex';
     }
 }
 function closeCPNModal() { document.getElementById('cpn-upgrade-modal').style.display = 'none'; }
 function closeSellModal() { document.getElementById('sell-modal').style.display = 'none'; }
 
+async function handleProductSubmit(e) {
+    e.preventDefault();
+    const type = document.getElementById('prod-type').value;
+    const fileInput = document.getElementById('prod-img-file');
+    let uploadedImg = '';
+    if(fileInput && fileInput.files[0]) {
+        uploadedImg = await uploadSelectedFile(fileInput);
+    }
+
+    const res = await fetch('/api/products', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+            title: document.getElementById('prod-title').value,
+            category: document.getElementById('prod-category').value,
+            price: document.getElementById('prod-price').value,
+            whatsapp_number: document.getElementById('prod-whatsapp').value,
+            description: document.getElementById('prod-desc').value,
+            listing_type: type,
+            image_url: uploadedImg
+        })
+    });
+    const data = await res.json();
+    if(data.success) {
+        showToast(data.message);
+        closeSellModal();
+        if(type === 'Market') loadCategoryListings('Market', 'products-container');
+        if(type === 'Beauty') loadCategoryListings('Beauty', 'beauty-container');
+        if(type === 'Jobs') loadCategoryListings('Jobs', 'jobs-container');
+    } else showToast(data.message, 'error');
+}
+
+// DATING & MATCHING
+function openDatingSettingsModal() {
+    if(!currentUser) return window.location.href = '/auth';
+    document.getElementById('dating-modal').style.display = 'flex';
+}
+function closeDatingModal() { document.getElementById('dating-modal').style.display = 'none'; }
+
+async function handleDatingProfileSubmit(e) {
+    e.preventDefault();
+    const res = await fetch('/api/dating/profile', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            age: document.getElementById('dt-age').value,
+            gender: document.getElementById('dt-gender').value,
+            relationship_intent: document.getElementById('dt-intent').value,
+            occupation: document.getElementById('dt-occupation').value,
+            bio: document.getElementById('dt-bio').value,
+            is_dating_active: document.getElementById('dt-active').checked
+        })
+    });
+    const data = await res.json();
+    if(data.success) {
+        showToast(data.message);
+        closeDatingModal();
+        loadDatingMatches();
+    } else showToast(data.message, 'error');
+}
+
+async function loadDatingMatches() {
+    const res = await fetch('/api/dating/matches');
+    const matches = await res.json();
+    const container = document.getElementById('dating-matches-container');
+    if(!matches.length) {
+        container.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No active singles on match feed yet. Click "Set Up My Dating Profile" to be the first!</div>`;
+        return;
+    }
+    container.innerHTML = matches.map(m => `
+        <div class="dating-card">
+            <div class="avatar" style="background:#7c3aed;width:54px;height:54px;font-size:1.3rem;">${m.full_name.charAt(0).toUpperCase()}</div>
+            <div style="flex:1;">
+                <h4 style="font-weight:800;color:var(--navy-blue);">${m.full_name}, ${m.age}</h4>
+                <div style="font-size:0.78rem;color:var(--emerald-green);font-weight:700;">${m.relationship_intent} • ${m.gender}</div>
+                <div style="font-size:0.82rem;color:var(--text-muted);margin-top:2px;">"${m.bio || 'Living in Ijebu'}"</div>
+            </div>
+            <button onclick="messageUser('${m.username}')" style="background:#4f46e5;color:#fff;border:none;padding:8px 12px;border-radius:10px;font-weight:700;font-size:0.78rem;cursor:pointer;">Say Hi 👋</button>
+        </div>
+    `).join('');
+}
+
+// CPN UPGRADE
 async function triggerCPNUpgrade() {
     const res = await fetch('/api/cpn/upgrade', {method:'POST'});
     const data = await res.json();
@@ -1431,27 +1646,6 @@ async function triggerCPNUpgrade() {
         closeCPNModal();
         await checkSession();
         openProfile(currentUser.username);
-    } else showToast(data.message, 'error');
-}
-
-async function handleProductSubmit(e) {
-    e.preventDefault();
-    const res = await fetch('/api/products', {
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({
-            title: document.getElementById('prod-title').value,
-            category: document.getElementById('prod-category').value,
-            price: document.getElementById('prod-price').value,
-            whatsapp_number: document.getElementById('prod-whatsapp').value,
-            description: document.getElementById('prod-desc').value
-        })
-    });
-    const data = await res.json();
-    if(data.success) {
-        showToast(data.message);
-        closeSellModal();
-        loadProducts();
     } else showToast(data.message, 'error');
 }
 
@@ -1470,22 +1664,10 @@ async function openProfile(username) {
     if(isSelf && isPartner) {
         cpnWalletBlock = `
             <div class="cpn-wallet-card">
-                <div class="cpn-row">
-                    <span>CPN Wallet Balance:</span>
-                    <span class="val-gold">${formatNaira(u.wallet_balance)}</span>
-                </div>
-                <div class="cpn-row">
-                    <span>CPN Referral Code:</span>
-                    <strong style="background:rgba(255,255,255,0.15);padding:3px 8px;border-radius:6px;">${u.referral_code}</strong>
-                </div>
-                <div class="cpn-row">
-                    <span>Direct Partners Recruited:</span>
-                    <strong style="color:#4ade80;">${u.recruits_count} Partners</strong>
-                </div>
-                <div class="cpn-row" style="margin-bottom:12px;">
-                    <span>Partner Link:</span>
-                    <button onclick="copyRefLink('${u.referral_code}')" style="background:#d97706;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:0.75rem;font-weight:700;cursor:pointer;">Copy Link</button>
-                </div>
+                <div class="cpn-row"><span>CPN Wallet Balance:</span><span class="val-gold">${formatNaira(u.wallet_balance)}</span></div>
+                <div class="cpn-row"><span>CPN Code:</span><strong style="background:rgba(255,255,255,0.15);padding:3px 8px;border-radius:6px;">${u.referral_code}</strong></div>
+                <div class="cpn-row"><span>Direct Recruits:</span><strong style="color:#4ade80;">${u.recruits_count} Partners</strong></div>
+                <div class="cpn-row" style="margin-bottom:12px;"><span>Partner Link:</span><button onclick="copyRefLink('${u.referral_code}')" style="background:#d97706;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:0.75rem;font-weight:700;cursor:pointer;">Copy Link</button></div>
                 <button onclick="openCashoutModal()" style="background:#059669;color:#fff;border:none;padding:10px;border-radius:8px;width:100%;font-weight:800;cursor:pointer;">Request Bank Cashout</button>
             </div>
         `;
@@ -1497,18 +1679,6 @@ async function openProfile(username) {
         </button>
     ` : '';
 
-    const postsHtml = u.posts.length ? u.posts.map(p => renderPostCard(p)).join('') : `<div class="card" style="text-align:center;color:var(--text-muted);">No posts published yet.</div>`;
-    const productsHtml = u.products.length ? u.products.map(p => `
-        <div class="product-card">
-            <div class="product-img-box"><i class="fa-solid fa-store"></i></div>
-            <div style="flex:1;">
-                <h4 style="font-weight:800;color:var(--navy-blue);">${p.title}</h4>
-                <div style="font-weight:800;color:var(--emerald-green);">${formatNaira(p.price)}</div>
-            </div>
-            <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" class="btn-whatsapp">Chat</a>
-        </div>
-    `).join('') : `<div class="card" style="text-align:center;color:var(--text-muted);">No market items listed.</div>`;
-
     container.innerHTML = `
         <div class="profile-hero">
             <div class="profile-avatar" style="background:var(--emerald-green);">${u.full_name.charAt(0).toUpperCase()}</div>
@@ -1517,41 +1687,14 @@ async function openProfile(username) {
         </div>
         ${messageBtn}
         ${cpnWalletBlock}
-
-        <div class="profile-stats">
-            <div class="profile-stat"><div class="profile-stat-val">${u.posts_count}</div><div class="profile-stat-lbl">Posts</div></div>
-            <div class="profile-stat"><div class="profile-stat-val">${u.products_count}</div><div class="profile-stat-lbl">Market Items</div></div>
-        </div>
-
-        <div class="profile-tabs">
-            <button class="profile-tab active" id="tab-btn-posts" onclick="toggleProfileTab('posts')">Posts (${u.posts_count})</button>
-            <button class="profile-tab" id="tab-btn-prods" onclick="toggleProfileTab('products')">Market (${u.products_count})</button>
-        </div>
-
-        <div id="profile-tab-posts">${postsHtml}</div>
-        <div id="profile-tab-products" style="display:none;" class="card">${productsHtml}</div>
     `;
 
     document.querySelectorAll('.view-section').forEach(v => v.classList.remove('active'));
     document.getElementById('view-profile').classList.add('active');
 }
 
-function toggleProfileTab(tab) {
-    document.querySelectorAll('.profile-tab').forEach(t => t.classList.remove('active'));
-    if(tab === 'posts') {
-        document.getElementById('tab-btn-posts').classList.add('active');
-        document.getElementById('profile-tab-posts').style.display = 'block';
-        document.getElementById('profile-tab-products').style.display = 'none';
-    } else {
-        document.getElementById('tab-btn-prods').classList.add('active');
-        document.getElementById('profile-tab-posts').style.display = 'none';
-        document.getElementById('profile-tab-products').style.display = 'block';
-    }
-}
-
 function copyRefLink(code) {
-    const link = `${window.location.origin}/auth?ref=${code}`;
-    navigator.clipboard.writeText(link);
+    navigator.clipboard.writeText(`${window.location.origin}/auth?ref=${code}`);
     showToast('Partner referral link copied!');
 }
 
@@ -1596,7 +1739,7 @@ async function loadChatPartners() {
     const data = await res.json();
     const c = document.getElementById('chat-partners-container');
     if(!data.success || !data.partners.length) {
-        c.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No conversations yet.<br><small>Visit a member's profile and tap "Message" to start.</small></div>`;
+        c.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No conversations yet.<br><small>Visit a member's profile or single listing and tap "Message" or "Say Hi" to start.</small></div>`;
         return;
     }
     c.innerHTML = data.partners.map(p => `
@@ -1606,7 +1749,7 @@ async function loadChatPartners() {
                 <div style="font-weight:800;color:var(--navy-blue);">${p.user.full_name}</div>
                 <div style="font-size:0.78rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.last_from_me ? 'You: ' : ''}${p.last_message}</div>
             </div>
-            ${p.unread ? `<span class="chat-unread-dot">${p.unread}</span>` : ''}
+            ${p.unread ? `<span style="background:#ef4444;color:#fff;font-size:0.7rem;font-weight:800;padding:2px 6px;border-radius:10px;">${p.unread}</span>` : ''}
         </div>
     `).join('');
 }
@@ -1687,7 +1830,7 @@ async function messageUser(username) {
 
 window.onload = function() {
     checkSession();
-    loadPosts();
+    loadPosts('Social', 'feed-posts-container');
     setInterval(refreshUnread, 15000);
 };
 </script>
@@ -1711,13 +1854,15 @@ AUTH_TEMPLATE = r"""
     }
     * { box-sizing: border-box; margin:0; padding:0; font-family:'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color:transparent; }
     body { background: #f8fafc; color: #0f172a; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 1rem; }
-    .auth-card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 18px; padding: 1.75rem; max-width: 420px; width: 100%; box-shadow: 0 10px 25px rgba(0,0,0,0.05); }
-    .brand { text-align: center; font-size: 1.25rem; font-weight: 800; color: var(--navy-blue); margin-bottom: 1.25rem; }
+    .auth-card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 18px; padding: 1.75rem; max-width: 420px; width: 100%; box-shadow: 0 10px 25px rgba(0,0,0,0.05); text-align: center; }
+    .auth-logo-img { height: 70px; width: auto; object-fit: contain; margin-bottom: 8px; }
+    .brand { font-size: 1.25rem; font-weight: 800; color: var(--navy-blue); margin-bottom: 2px; }
     .brand span { color: var(--emerald-green); }
+    .slogan { font-size: 0.78rem; font-weight: 700; color: #64748b; font-style: italic; margin-bottom: 1.25rem; }
     .auth-tabs { display: flex; gap: 6px; margin-bottom: 1.25rem; background: #f1f5f9; padding: 4px; border-radius: 12px; }
     .auth-tab { flex: 1; padding: 9px; border-radius: 8px; border: none; background: transparent; font-weight: 700; font-size: 0.85rem; color: #64748b; cursor: pointer; }
     .auth-tab.active { background: #fff; color: var(--navy-blue); box-shadow: 0 2px 6px rgba(0,0,0,0.06); }
-    .form-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 0.9rem; }
+    .form-group { display: flex; flex-direction: column; gap: 5px; margin-bottom: 0.9rem; text-align: left; }
     .form-group label { font-size: 0.82rem; font-weight: 700; color: #0f172a; }
     .form-control { padding: 11px 12px; border-radius: 10px; border: 1.5px solid var(--border-light); font-size: 0.9rem; outline: none; width: 100%; background: #fff; font-family: inherit; }
     .btn-submit { background: var(--emerald-green); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.9rem; cursor: pointer; width: 100%; margin-top: 6px; }
@@ -1725,7 +1870,10 @@ AUTH_TEMPLATE = r"""
 </head>
 <body>
 <div class="auth-card">
+    <img src="/static/logo.png" alt="Ijebu Connect Logo" class="auth-logo-img" onerror="this.style.display='none'">
     <div class="brand">IJEBU <span>CONNECT</span></div>
+    <div class="slogan">Connect. Discover. Trade. Belong.</div>
+
     <div class="auth-tabs">
         <button class="auth-tab active" id="tab-btn-login" onclick="toggleAuth('login')">Sign In</button>
         <button class="auth-tab" id="tab-btn-register" onclick="toggleAuth('register')">Register Free</button>
@@ -1839,8 +1987,9 @@ ADMIN_TEMPLATE = r"""
 <title>Admin Dashboard - Ijebu Connect</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
-    body { font-family:'Plus Jakarta Sans', sans-serif; background:#f8fafc; color:#0f172a; padding:1.5rem; max-width:800px; margin:0 auto; }
-    h1 { color:#0b1e36; margin-bottom:1rem; }
+    body { font-family:'Plus Jakarta Sans', sans-serif; background:#f8fafc; color:#0f172a; padding:1.5rem; max-width:820px; margin:0 auto; }
+    .admin-header { display:flex; align-items:center; gap:12px; margin-bottom:1.25rem; }
+    .admin-logo { height:50px; width:auto; }
     .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:1rem; margin-bottom:1.5rem; }
     .card { background:#fff; border:1.5px solid #cbd5e1; border-radius:14px; padding:1.25rem; }
     .val { font-size:1.5rem; font-weight:800; color:#059669; }
@@ -1853,20 +2002,26 @@ ADMIN_TEMPLATE = r"""
 </style>
 </head>
 <body>
-<h1>⚙️ Admin Dashboard</h1>
-<a href="/" style="display:inline-block;margin-bottom:1rem;color:#0b1e36;font-weight:700;text-decoration:none;">← Back to App</a>
+<div class="admin-header">
+    <img src="/static/logo.png" alt="Logo" class="admin-logo" onerror="this.style.display='none'">
+    <div>
+        <h1 style="color:#0b1e36;font-size:1.4rem;line-height:1;">⚙️ Admin Control Panel</h1>
+        <small style="color:#64748b;font-weight:700;">Ijebu Connect Ecosystem</small>
+    </div>
+</div>
+<a href="/" style="display:inline-block;margin-bottom:1rem;color:#0b1e36;font-weight:700;text-decoration:none;">← Back to Main Platform</a>
 
 <div class="grid">
     <div class="card"><div class="val" id="st-users">0</div><div class="lbl">Total Users</div></div>
     <div class="card"><div class="val" id="st-partners">0</div><div class="lbl">CPN Partners</div></div>
-    <div class="card"><div class="val" id="st-prods">0</div><div class="lbl">Products</div></div>
+    <div class="card"><div class="val" id="st-prods">0</div><div class="lbl">Listings</div></div>
     <div class="card"><div class="val" id="st-wallets">₦0.00</div><div class="lbl">User Balances</div></div>
 </div>
 
 <h3>Pending Bank Cashouts</h3>
 <table style="margin-top:0.5rem;">
     <thead>
-        <tr><th>User</th><th>Amount</th><th>Bank</th><th>Acc Number</th><th>Acc Name</th><th>Action</th></tr>
+        <tr><th>User</th><th>Amount</th><th>Bank Details</th><th>Action</th></tr>
     </thead>
     <tbody id="payouts-body"></tbody>
 </table>
@@ -1886,14 +2041,12 @@ async function loadPayouts() {
     const res = await fetch('/api/admin/payouts');
     const payouts = await res.json();
     const body = document.getElementById('payouts-body');
-    if(!payouts.length) { body.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#64748b;">No cashout requests.</td></tr>`; return; }
+    if(!payouts.length) { body.innerHTML = `<tr><td colspan="4" style="text-align:center;color:#64748b;">No cashout requests.</td></tr>`; return; }
     body.innerHTML = payouts.map(p => `
         <tr>
             <td><b>${p.full_name}</b><br><small>@${p.username}</small></td>
             <td><b>₦${p.amount.toLocaleString()}</b></td>
-            <td>${p.bank_name}</td>
-            <td>${p.account_number}</td>
-            <td>${p.account_name}</td>
+            <td>${p.bank_name}<br><small>${p.account_number} (${p.account_name})</small></td>
             <td>
                 ${p.status === 'pending' ? `
                     <button class="btn-act btn-app" onclick="updatePayout(${p.id}, 'approved')">Approve</button>
