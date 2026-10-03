@@ -23,6 +23,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 DATABASE_URL = os.environ.get('DATABASE_URL')
 PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '').strip()
 ALLOW_TEST_PAYMENTS = os.environ.get('ALLOW_TEST_PAYMENTS', 'True').lower() == 'true'
+CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', 'willysmediaworld@gmail.com')
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY') or 'ijebu_connect_secret_key_2026_secured'
@@ -92,7 +93,7 @@ def init_db():
                 price REAL NOT NULL,
                 description TEXT,
                 image_url TEXT DEFAULT '',
-                location TEXT DEFAULT 'Ijebu-Imusin',
+                location TEXT DEFAULT 'Ijebu Connect',
                 whatsapp_number TEXT NOT NULL,
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -167,18 +168,41 @@ def init_db():
             )
         ''')
 
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS messages (
+                id {pk_type},
+                sender_id INTEGER NOT NULL,
+                receiver_id INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                is_read INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        cursor.execute(f'''
+            CREATE TABLE IF NOT EXISTS blocked_users (
+                id {pk_type},
+                blocker_id INTEGER NOT NULL,
+                blocked_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(blocker_id, blocked_id)
+            )
+        ''')
+
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_uname ON users(username)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_phone ON users(phone)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_ref   ON users(referral_code)")
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_user  ON posts(user_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_msg_pair    ON messages(sender_id, receiver_id)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_msg_recv    ON messages(receiver_id, is_read)")
 
         db.commit()
 
         # Admin Seed
-        admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'imusinconnect')
-        admin_password = os.environ.get('ADMIN_SEED_PASSWORD', 'imusin1972williams')
+        admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect')
+        admin_password = os.environ.get('ADMIN_SEED_PASSWORD', 'CHANGE_ME_IN_ENV_NOW')
         admin_phone    = os.environ.get('ADMIN_SEED_PHONE',    '09018363715')
-        admin_name     = os.environ.get('ADMIN_SEED_NAME',     'Willys Media Admin')
+        admin_name     = os.environ.get('ADMIN_SEED_NAME',     "Sir Ola'Rotimi")
         admin_ref      = os.environ.get('ADMIN_SEED_REF',      'CPN00001')
 
         cursor.execute(
@@ -214,7 +238,6 @@ def process_cpn_commission(user_id, upgrade_fee=2000.0):
     if not buyer or not buyer['referred_by']:
         return
 
-    # Tier-1 Commission (10%)
     cursor.execute(f"SELECT id, full_name, referred_by FROM users WHERE referral_code = {p}", (buyer['referred_by'],))
     t1 = cursor.fetchone()
     if t1:
@@ -224,7 +247,6 @@ def process_cpn_commission(user_id, upgrade_fee=2000.0):
                             VALUES ({p}, {p}, 'Tier-1 CPN Commission', {p})''',
                         (t1['id'], bonus1, f"10% CPN Reward from {buyer['full_name']}"))
 
-        # Tier-2 Commission (5%)
         if t1['referred_by']:
             cursor.execute(f"SELECT id FROM users WHERE referral_code = {p}", (t1['referred_by'],))
             t2 = cursor.fetchone()
@@ -374,7 +396,6 @@ def upgrade_to_cpn():
     p = query_param()
     uid = session['user_id']
 
-    # PAYSTACK MODE
     if PAYSTACK_SECRET_KEY:
         cursor.execute(f"SELECT username FROM users WHERE id = {p}", (uid,))
         user = cursor.fetchone()
@@ -396,7 +417,6 @@ def upgrade_to_cpn():
         except Exception as e:
             return jsonify({'success': False, 'message': str(e)}), 500
 
-    # TEST / SIMULATED MODE
     if ALLOW_TEST_PAYMENTS:
         cursor.execute(f"UPDATE users SET user_type = 'CPN Partner', is_verified_merchant = 1 WHERE id = {p}", (uid,))
         db.commit()
@@ -725,6 +745,181 @@ def get_user_profile(username):
 
 
 # =============================================================================
+# CHAT API
+# =============================================================================
+
+def _is_blocked(cursor, p, a, b):
+    cursor.execute(
+        f"SELECT 1 FROM blocked_users WHERE blocker_id = {p} AND blocked_id = {p}",
+        (a, b)
+    )
+    return cursor.fetchone() is not None
+
+
+@app.route('/api/chat/unread', methods=['GET'])
+def chat_unread():
+    if 'user_id' not in session:
+        return jsonify({'success': True, 'count': 0})
+    db = get_db(); cursor = db.cursor(); p = query_param()
+    cursor.execute(
+        f"SELECT COUNT(*) FROM messages WHERE receiver_id = {p} AND is_read = 0",
+        (session['user_id'],)
+    )
+    return jsonify({'success': True, 'count': cursor.fetchone()[0]})
+
+
+@app.route('/api/chat/partners', methods=['GET'])
+def chat_partners():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    db = get_db(); cursor = db.cursor(); p = query_param()
+    uid = session['user_id']
+
+    cursor.execute(f'''
+        SELECT
+            CASE WHEN sender_id = {p} THEN receiver_id ELSE sender_id END AS other_id,
+            MAX(id) AS last_id
+        FROM messages
+        WHERE sender_id = {p} OR receiver_id = {p}
+        GROUP BY other_id
+        ORDER BY MAX(id) DESC
+    ''', (uid, uid))
+
+    result = []
+    for row in cursor.fetchall():
+        other_id = row['other_id']
+        last_id  = row['last_id']
+
+        cursor.execute(f"SELECT id, full_name, username, user_type FROM users WHERE id = {p}", (other_id,))
+        u = cursor.fetchone()
+        if not u:
+            continue
+
+        cursor.execute(f"SELECT content, sender_id, created_at FROM messages WHERE id = {p}", (last_id,))
+        m = cursor.fetchone()
+
+        cursor.execute(
+            f"SELECT COUNT(*) FROM messages WHERE sender_id = {p} AND receiver_id = {p} AND is_read = 0",
+            (other_id, uid)
+        )
+        unread = cursor.fetchone()[0]
+
+        result.append({
+            'user': dict(u),
+            'last_message': (m['content'] if m else '')[:60],
+            'last_from_me': (m['sender_id'] == uid) if m else False,
+            'last_time': str(m['created_at']) if m else '',
+            'unread': unread
+        })
+
+    return jsonify({'success': True, 'partners': result})
+
+
+@app.route('/api/chat/<username>', methods=['GET', 'POST'])
+def chat_thread(username):
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+
+    db = get_db(); cursor = db.cursor(); p = query_param()
+    uid = session['user_id']
+
+    cursor.execute(f"SELECT id, full_name, username, user_type FROM users WHERE LOWER(username) = {p}", (username.lower(),))
+    other = cursor.fetchone()
+    if not other:
+        return jsonify({'success': False, 'message': 'User not found.'}), 404
+    other_id = other['id']
+
+    if other_id == uid:
+        return jsonify({'success': False, 'message': 'You cannot chat with yourself.'}), 400
+
+    if request.method == 'POST':
+        data = request.json or {}
+        content = (data.get('content') or '').strip()
+        if not content:
+            return jsonify({'success': False, 'message': 'Message cannot be empty.'}), 400
+        if len(content) > 2000:
+            return jsonify({'success': False, 'message': 'Message too long (max 2000 chars).'}), 400
+
+        if _is_blocked(cursor, p, uid, other_id) or _is_blocked(cursor, p, other_id, uid):
+            return jsonify({'success': False, 'message': 'Cannot send message.'}), 403
+
+        # Soft daily rate-limit (200/day per sender)
+        if DATABASE_URL:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM messages WHERE sender_id = {p} AND created_at > NOW() - INTERVAL '1 day'",
+                (uid,)
+            )
+        else:
+            cursor.execute(
+                f"SELECT COUNT(*) FROM messages WHERE sender_id = {p} AND created_at > datetime('now','-1 day')",
+                (uid,)
+            )
+        daily = cursor.fetchone()[0]
+        if daily >= 200:
+            return jsonify({'success': False, 'message': 'Daily message limit reached.'}), 429
+
+        cursor.execute(
+            f"INSERT INTO messages (sender_id, receiver_id, content) VALUES ({p}, {p}, {p})",
+            (uid, other_id, content)
+        )
+        db.commit()
+        return jsonify({'success': True, 'message': 'Sent.'})
+
+    # GET — mark as read, return thread
+    cursor.execute(
+        f"UPDATE messages SET is_read = 1 WHERE sender_id = {p} AND receiver_id = {p}",
+        (other_id, uid)
+    )
+    db.commit()
+
+    cursor.execute(f'''
+        SELECT m.id, m.sender_id, m.receiver_id, m.content, m.is_read, m.created_at,
+               u.full_name, u.username
+        FROM messages m JOIN users u ON m.sender_id = u.id
+        WHERE (m.sender_id = {p} AND m.receiver_id = {p})
+           OR (m.sender_id = {p} AND m.receiver_id = {p})
+        ORDER BY m.id ASC LIMIT 300
+    ''', (uid, other_id, other_id, uid))
+
+    messages = [dict(r) for r in cursor.fetchall()]
+    return jsonify({'success': True, 'other': dict(other), 'messages': messages, 'me_id': uid})
+
+
+@app.route('/api/chat/block/<username>', methods=['POST'])
+def block_user(username):
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    db = get_db(); cursor = db.cursor(); p = query_param()
+    uid = session['user_id']
+
+    cursor.execute(f"SELECT id FROM users WHERE LOWER(username) = {p}", (username.lower(),))
+    other = cursor.fetchone()
+    if not other:
+        return jsonify({'success': False, 'message': 'User not found.'}), 404
+    if other['id'] == uid:
+        return jsonify({'success': False, 'message': 'Cannot block yourself.'}), 400
+
+    cursor.execute(
+        f"SELECT id FROM blocked_users WHERE blocker_id = {p} AND blocked_id = {p}",
+        (uid, other['id'])
+    )
+    if cursor.fetchone():
+        cursor.execute(
+            f"DELETE FROM blocked_users WHERE blocker_id = {p} AND blocked_id = {p}",
+            (uid, other['id'])
+        )
+        db.commit()
+        return jsonify({'success': True, 'blocked': False, 'message': 'User unblocked.'})
+
+    cursor.execute(
+        f"INSERT INTO blocked_users (blocker_id, blocked_id) VALUES ({p}, {p})",
+        (uid, other['id'])
+    )
+    db.commit()
+    return jsonify({'success': True, 'blocked': True, 'message': 'User blocked.'})
+
+
+# =============================================================================
 # ADMIN API
 # =============================================================================
 
@@ -799,7 +994,7 @@ INDEX_TEMPLATE = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ijebu-Imusin Connect Network</title>
+<title>Ijebu Connect Network</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
@@ -821,16 +1016,16 @@ body { background: var(--bg-body); color: var(--text-dark); display: flex; flex-
 
 header { background: #fff; padding: 0.85rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1.5px solid var(--border-light); position: sticky; top:0; z-index: 100; }
 .brand-box { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.brand-title { font-size: 1.15rem; font-weight: 800; color: var(--navy-blue); }
+.brand-title { font-size: 1.05rem; font-weight: 800; color: var(--navy-blue); line-height:1.1; }
 .brand-title span { color: var(--emerald-green); }
 
-.header-auth { display: flex; align-items: center; gap: 8px; }
-.btn-header-login { background: var(--navy-blue); color: #fff; text-decoration: none; padding: 7px 16px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; }
-.header-user-pill { background: #f1f5f9; color: var(--navy-blue); padding: 6px 12px; border-radius: 20px; font-weight: 700; font-size: 0.8rem; cursor: pointer; border: none; }
-.header-logout-btn { background: #ef4444; color: #fff; border: none; padding: 6px 12px; border-radius: 20px; font-weight: 700; font-size: 0.78rem; cursor: pointer; }
+.header-auth { display: flex; align-items: center; gap: 6px; }
+.btn-header-login { background: var(--navy-blue); color: #fff; text-decoration: none; padding: 7px 14px; border-radius: 20px; font-weight: 700; font-size: 0.78rem; }
+.header-user-pill { background: #f1f5f9; color: var(--navy-blue); padding: 6px 10px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; cursor: pointer; border: none; max-width:110px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.header-logout-btn { background: #ef4444; color: #fff; border: none; padding: 6px 10px; border-radius: 20px; font-weight: 700; font-size: 0.75rem; cursor: pointer; }
 
-.top-nav-pills { display: flex; gap: 8px; padding: 0.85rem 1rem 0.2rem; max-width: 600px; margin: 0 auto; width: 100%; }
-.nav-pill { padding: 10px 16px; border-radius: 20px; font-size: 0.85rem; font-weight: 700; background: #fff; border: 1.5px solid var(--border-light); color: var(--text-muted); cursor: pointer; flex: 1; text-align: center; }
+.top-nav-pills { display: flex; gap: 6px; padding: 0.85rem 1rem 0.2rem; max-width: 600px; margin: 0 auto; width: 100%; flex-wrap: wrap; }
+.nav-pill { padding: 9px 12px; border-radius: 20px; font-size: 0.8rem; font-weight: 700; background: #fff; border: 1.5px solid var(--border-light); color: var(--text-muted); cursor: pointer; flex: 1; min-width: 0; text-align: center; position: relative; }
 .nav-pill.active { background: var(--navy-blue); color: #fff; border-color: var(--navy-blue); }
 
 .app-container { max-width: 600px; margin: 0 auto; width: 100%; padding: 0.5rem 1rem 2rem; flex: 1; }
@@ -848,7 +1043,6 @@ header { background: #fff; padding: 0.85rem 1rem; display: flex; justify-content
 .clickable-user { cursor: pointer; font-weight: 800; color: var(--navy-blue); }
 .clickable-user:hover { color: var(--emerald-green); text-decoration: underline; }
 
-/* Posts Feed */
 .feed-post { background: #fff; border: 1.5px solid var(--border-light); border-radius: 16px; padding: 1rem; margin-bottom: 0.85rem; }
 .post-header { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 8px; }
 .avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 0.9rem; flex-shrink: 0; cursor: pointer; }
@@ -859,13 +1053,11 @@ header { background: #fff; padding: 0.85rem 1rem; display: flex; justify-content
 .post-action { flex: 1; background: none; border: none; padding: 8px; border-radius: 8px; font-size: 0.82rem; font-weight: 700; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; }
 .post-action.liked { color: #ef4444; }
 
-/* Product Cards */
 .product-card { display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--border-light); padding-bottom: 12px; margin-bottom: 12px; }
 .product-card:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
 .product-img-box { width: 64px; height: 64px; border-radius: 12px; background: #f1f5f9; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: #0f172a; flex-shrink: 0; }
 .btn-whatsapp { background: #25d366; color: #fff; border: none; padding: 8px 14px; border-radius: 10px; font-weight: 700; font-size: 0.8rem; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }
 
-/* Profile Wall & CPN Wallet Box */
 .profile-hero { background: var(--navy-blue); color: #fff; border-radius: 18px; padding: 1.5rem 1.25rem; margin-bottom: 1rem; text-align: center; }
 .profile-avatar { width: 72px; height: 72px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 1.6rem; margin: 0 auto 10px; border: 3px solid rgba(255,255,255,0.2); }
 .profile-name { font-size: 1.2rem; font-weight: 800; }
@@ -883,7 +1075,17 @@ header { background: #fff; padding: 0.85rem 1rem; display: flex; justify-content
 .profile-tab { flex: 1; padding: 10px; border-radius: 10px; border: 1.5px solid var(--border-light); background: #fff; color: var(--text-muted); font-weight: 700; font-size: 0.82rem; cursor: pointer; }
 .profile-tab.active { background: var(--navy-blue); color: #fff; border-color: var(--navy-blue); }
 
+.chat-bubble { max-width:75%; padding:10px 14px; border-radius:16px; margin-bottom:8px; font-size:0.9rem; line-height:1.4; word-wrap:break-word; }
+.chat-bubble.me { background:var(--emerald-green); color:#fff; margin-left:auto; border-bottom-right-radius:4px; }
+.chat-bubble.them { background:#fff; border:1.5px solid var(--border-light); border-bottom-left-radius:4px; }
+.chat-time { font-size:0.65rem; opacity:0.7; margin-top:3px; }
+.chat-partner-row { display:flex; gap:12px; align-items:center; padding:12px; border-bottom:1px solid var(--border-light); cursor:pointer; }
+.chat-partner-row:hover { background:#f8fafc; }
+.chat-unread-dot { background:#ef4444; color:#fff; font-size:0.7rem; font-weight:800; padding:3px 8px; border-radius:10px; }
+
 footer { background: #fff; text-align: center; padding: 1.5rem 1rem; font-size: 0.82rem; color: var(--text-muted); border-top: 1.5px solid var(--border-light); margin-top: auto; line-height: 1.6; }
+footer a { color: var(--emerald-green); text-decoration: none; font-weight: 700; }
+footer a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -892,20 +1094,23 @@ footer { background: #fff; text-align: center; padding: 1.5rem 1rem; font-size: 
 
 <header>
     <div class="brand-box" onclick="switchNav('feed')">
-        <div class="brand-title">IJEBU-IMUSIN <span>CONNECT</span></div>
+        <div class="brand-title">IJEBU<br><span>CONNECT</span></div>
     </div>
     <div class="header-auth" id="header-auth"></div>
 </header>
 
 <div class="top-nav-pills">
-    <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')">📰 Community Feed</div>
-    <div class="nav-pill" data-nav="market" onclick="switchNav('market')">🛒 Market Hub</div>
+    <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')">📰 Feed</div>
+    <div class="nav-pill" data-nav="market" onclick="switchNav('market')">🛒 Market</div>
+    <div class="nav-pill" data-nav="chat" onclick="switchNav('chat')">
+        💬 Chat
+        <span id="chat-badge" style="display:none;position:absolute;top:-4px;right:-4px;background:#ef4444;color:#fff;font-size:0.65rem;font-weight:800;padding:2px 6px;border-radius:10px;">0</span>
+    </div>
     <div class="nav-pill" id="admin-pill" style="display:none;" onclick="window.location.href='/admin'">⚙️ Admin</div>
 </div>
 
 <div class="app-container">
 
-    <!-- FEED VIEW -->
     <div id="view-feed" class="view-section active">
         <div class="card">
             <form onsubmit="handlePostSubmit(event)">
@@ -918,7 +1123,6 @@ footer { background: #fff; text-align: center; padding: 1.5rem 1rem; font-size: 
         <div id="feed-posts-container"></div>
     </div>
 
-    <!-- MARKET VIEW -->
     <div id="view-market" class="view-section">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
             <h3 style="font-weight:800;color:var(--navy-blue);">Market Hub</h3>
@@ -932,7 +1136,24 @@ footer { background: #fff; text-align: center; padding: 1.5rem 1rem; font-size: 
         <div id="products-container" class="card"></div>
     </div>
 
-    <!-- USER PROFILE & WALL VIEW -->
+    <div id="view-chat" class="view-section">
+        <div id="chat-list-wrap">
+            <h3 style="font-weight:800;color:var(--navy-blue);margin-bottom:12px;">Messages</h3>
+            <div id="chat-partners-container"></div>
+        </div>
+        <div id="chat-thread-wrap" style="display:none;">
+            <button onclick="closeChatThread()" style="background:#fff;border:1.5px solid var(--border-light);padding:6px 14px;border-radius:10px;font-weight:700;font-size:0.8rem;cursor:pointer;margin-bottom:1rem;">← Back</button>
+            <div id="chat-thread-header" class="card" style="padding:0.75rem 1rem;display:flex;justify-content:space-between;align-items:center;"></div>
+            <div id="chat-messages" style="min-height:200px;"></div>
+            <form onsubmit="sendChatMessage(event)" style="position:sticky;bottom:0;background:var(--bg-body);padding:8px 0;">
+                <div style="display:flex;gap:8px;">
+                    <input type="text" id="chat-input" class="form-control" placeholder="Type a message..." style="flex:1;" autocomplete="off">
+                    <button type="submit" class="btn-submit" style="width:auto;padding:11px 20px;">Send</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <div id="view-profile" class="view-section">
         <button onclick="switchNav('feed')" style="background:#fff;border:1.5px solid var(--border-light);padding:6px 14px;border-radius:10px;font-weight:700;font-size:0.8rem;cursor:pointer;margin-bottom:1rem;">← Back to Feed</button>
         <div id="profile-wall-container"></div>
@@ -940,7 +1161,6 @@ footer { background: #fff; text-align: center; padding: 1.5rem 1rem; font-size: 
 
 </div>
 
-<!-- CPN ONBOARDING / UPGRADE MODAL -->
 <div id="cpn-upgrade-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999;align-items:center;justify-content:center;padding:1rem;">
     <div class="card" style="max-width:440px;width:100%;background:#fff;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
@@ -954,7 +1174,6 @@ footer { background: #fff; text-align: center; padding: 1.5rem 1rem; font-size: 
     </div>
 </div>
 
-<!-- SELL ITEM MODAL -->
 <div id="sell-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999;align-items:center;justify-content:center;padding:1rem;">
     <div class="card" style="max-width:480px;width:100%;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
@@ -994,7 +1213,6 @@ footer { background: #fff; text-align: center; padding: 1.5rem 1rem; font-size: 
     </div>
 </div>
 
-<!-- CASHOUT MODAL -->
 <div id="cashout-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:999;align-items:center;justify-content:center;padding:1rem;">
     <div class="card" style="max-width:420px;width:100%;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">
@@ -1025,13 +1243,13 @@ footer { background: #fff; text-align: center; padding: 1.5rem 1rem; font-size: 
 
 <footer>
     Designed &amp; Developed by <strong>Willys Media World</strong><br>
-    <i class="fa-solid fa-location-dot"></i> Okepo Quarters, Ijebu-Imusin — <i class="fa-solid fa-phone"></i> 09018363715<br>
-    <span style="font-size:.75rem;">willysmediaworld@gmail.com</span><br><br>
-    &copy; 2026 Ijebu-Imusin Connect. All Rights Reserved.
+    <i class="fa-solid fa-envelope"></i> <a href="mailto:{{ contact_email }}">{{ contact_email }}</a><br><br>
+    &copy; 2026 Ijebu Connect. All Rights Reserved.
 </footer>
 
 <script>
 let currentUser = null;
+let currentChatUser = null;
 
 function showToast(msg, type = 'success') {
     const box = document.getElementById('toast-container');
@@ -1049,15 +1267,13 @@ function formatNaira(val) {
 function switchNav(target) {
     document.querySelectorAll('.nav-pill').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.view-section').forEach(v => v.classList.remove('active'));
-
     const pill = document.querySelector(`.nav-pill[data-nav="${target}"]`);
     if(pill) pill.classList.add('active');
-
     const view = document.getElementById(`view-${target}`);
     if(view) view.classList.add('active');
-
     if(target === 'feed') loadPosts();
     if(target === 'market') loadProducts();
+    if(target === 'chat') { loadChatPartners(); refreshUnread(); }
 }
 
 async function checkSession() {
@@ -1070,6 +1286,7 @@ async function checkSession() {
             if(currentUser.user_type === 'Admin') {
                 document.getElementById('admin-pill').style.display = 'block';
             }
+            refreshUnread();
         } else {
             currentUser = null;
             renderHeaderAuth();
@@ -1093,6 +1310,7 @@ async function handleLogout() {
     await fetch('/api/auth/logout', {method:'POST'});
     currentUser = null;
     document.getElementById('admin-pill').style.display = 'none';
+    document.getElementById('chat-badge').style.display = 'none';
     renderHeaderAuth();
     showToast('Logged out.');
     switchNav('feed');
@@ -1224,7 +1442,7 @@ async function handleProductSubmit(e) {
     } else showToast(data.message, 'error');
 }
 
-// PROFILE WALL & CPN DASHBOARD
+// PROFILE
 async function openProfile(username) {
     const res = await fetch(`/api/users/${encodeURIComponent(username)}`);
     const data = await res.json();
@@ -1260,6 +1478,12 @@ async function openProfile(username) {
         `;
     }
 
+    const messageBtn = (!isSelf && currentUser) ? `
+        <button onclick="messageUser('${u.username}')" style="background:var(--navy-blue);color:#fff;border:none;padding:10px;border-radius:10px;width:100%;font-weight:800;cursor:pointer;margin-bottom:1rem;">
+            💬 Message ${u.full_name.split(' ')[0]}
+        </button>
+    ` : '';
+
     const postsHtml = u.posts.length ? u.posts.map(p => renderPostCard(p)).join('') : `<div class="card" style="text-align:center;color:var(--text-muted);">No posts published yet.</div>`;
     const productsHtml = u.products.length ? u.products.map(p => `
         <div class="product-card">
@@ -1279,6 +1503,7 @@ async function openProfile(username) {
             <div style="font-size:0.85rem;opacity:0.8;">@${u.username} • ${u.user_type}</div>
         </div>
 
+        ${messageBtn}
         ${cpnWalletBlock}
 
         <div class="profile-stats">
@@ -1342,9 +1567,116 @@ async function handlePayoutRequest(e) {
     } else showToast(data.message, 'error');
 }
 
+// CHAT
+async function refreshUnread() {
+    if(!currentUser) { document.getElementById('chat-badge').style.display='none'; return; }
+    try {
+        const res = await fetch('/api/chat/unread');
+        const data = await res.json();
+        const badge = document.getElementById('chat-badge');
+        if(data.count > 0) { badge.innerText = data.count > 99 ? '99+' : data.count; badge.style.display='block'; }
+        else badge.style.display='none';
+    } catch(e){}
+}
+
+async function loadChatPartners() {
+    const res = await fetch('/api/chat/partners');
+    const data = await res.json();
+    const c = document.getElementById('chat-partners-container');
+    if(!data.success || !data.partners.length) {
+        c.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No conversations yet.<br><small>Visit a member's profile and tap "Message" to start.</small></div>`;
+        return;
+    }
+    c.innerHTML = data.partners.map(p => `
+        <div class="chat-partner-row" onclick="openChatThread('${p.user.username}')">
+            <div class="avatar" style="background:var(--navy-blue);">${p.user.full_name.charAt(0).toUpperCase()}</div>
+            <div style="flex:1;min-width:0;">
+                <div style="font-weight:800;color:var(--navy-blue);">${p.user.full_name}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${p.last_from_me ? 'You: ' : ''}${p.last_message}</div>
+            </div>
+            ${p.unread ? `<span class="chat-unread-dot">${p.unread}</span>` : ''}
+        </div>
+    `).join('');
+}
+
+async function openChatThread(username) {
+    if(!currentUser) return window.location.href = '/auth';
+    currentChatUser = username;
+    document.getElementById('chat-list-wrap').style.display = 'none';
+    document.getElementById('chat-thread-wrap').style.display = 'block';
+
+    const res = await fetch(`/api/chat/${encodeURIComponent(username)}`);
+    const data = await res.json();
+    if(!data.success) return showToast(data.message, 'error');
+
+    document.getElementById('chat-thread-header').innerHTML = `
+        <div style="display:flex;align-items:center;gap:10px;">
+            <div class="avatar" style="background:var(--navy-blue);">${data.other.full_name.charAt(0).toUpperCase()}</div>
+            <div>
+                <div style="font-weight:800;color:var(--navy-blue);">${data.other.full_name}</div>
+                <div style="font-size:0.72rem;color:var(--text-muted);">@${data.other.username}</div>
+            </div>
+        </div>
+        <button onclick="toggleBlock('${data.other.username}')" style="background:none;border:1.5px solid #ef4444;color:#ef4444;padding:6px 12px;border-radius:8px;font-size:0.72rem;font-weight:700;cursor:pointer;">Block</button>
+    `;
+
+    const m = document.getElementById('chat-messages');
+    if(!data.messages.length) {
+        m.innerHTML = `<div style="text-align:center;color:var(--text-muted);padding:2rem 0;">No messages yet. Say hi 👋</div>`;
+    } else {
+        m.innerHTML = data.messages.map(msg => `
+            <div class="chat-bubble ${msg.sender_id === data.me_id ? 'me' : 'them'}">
+                ${msg.content}
+                <div class="chat-time">${new Date(msg.created_at).toLocaleString()}</div>
+            </div>
+        `).join('');
+        m.scrollTop = m.scrollHeight;
+    }
+    refreshUnread();
+}
+
+function closeChatThread() {
+    currentChatUser = null;
+    document.getElementById('chat-list-wrap').style.display = 'block';
+    document.getElementById('chat-thread-wrap').style.display = 'none';
+    loadChatPartners();
+}
+
+async function sendChatMessage(e) {
+    e.preventDefault();
+    const input = document.getElementById('chat-input');
+    const content = input.value.trim();
+    if(!content || !currentChatUser) return;
+    input.value = '';
+    const res = await fetch(`/api/chat/${encodeURIComponent(currentChatUser)}`, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({content})
+    });
+    const data = await res.json();
+    if(data.success) {
+        openChatThread(currentChatUser);
+    } else showToast(data.message, 'error');
+}
+
+async function toggleBlock(username) {
+    if(!confirm('Block this user? You will not see their messages.')) return;
+    const res = await fetch(`/api/chat/block/${encodeURIComponent(username)}`, {method:'POST'});
+    const data = await res.json();
+    showToast(data.message);
+    if(data.blocked) closeChatThread();
+}
+
+async function messageUser(username) {
+    if(!currentUser) return window.location.href = '/auth';
+    switchNav('chat');
+    openChatThread(username);
+}
+
 window.onload = function() {
     checkSession();
     loadPosts();
+    setInterval(refreshUnread, 15000);
 };
 </script>
 </body>
@@ -1356,7 +1688,7 @@ AUTH_TEMPLATE = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Auth | Ijebu-Imusin Connect</title>
+<title>Auth | Ijebu Connect</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap" rel="stylesheet">
 <style>
     body { font-family:'Plus Jakarta Sans',sans-serif; background:#f8fafc; display:flex; justify-content:center; align-items:center; min-height:100vh; padding:20px; margin:0; }
@@ -1374,13 +1706,12 @@ AUTH_TEMPLATE = r"""
 </head>
 <body>
 <div class="auth-card">
-    <div class="brand">IJEBU-IMUSIN <span>CONNECT</span></div>
+    <div class="brand">IJEBU <span>CONNECT</span></div>
     <div class="auth-tabs">
         <button class="auth-tab active" id="tab-btn-login" onclick="toggleAuth('login')">Sign In</button>
         <button class="auth-tab" id="tab-btn-register" onclick="toggleAuth('register')">Register Free</button>
     </div>
 
-    <!-- LOGIN FORM -->
     <form id="form-login" onsubmit="handleLogin(event)">
         <div class="form-group">
             <label>Username or Phone</label>
@@ -1393,7 +1724,6 @@ AUTH_TEMPLATE = r"""
         <button type="submit" class="btn-submit" style="background:#0b1e36;">Sign In</button>
     </form>
 
-    <!-- REGISTER FORM -->
     <form id="form-register" style="display:none;" onsubmit="handleRegister(event)">
         <div class="form-group">
             <label>Full Name</label>
@@ -1486,7 +1816,7 @@ ADMIN_TEMPLATE = r"""
 <html lang="en">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Admin Panel — Ijebu-Imusin Connect</title>
+<title>Admin Panel — Ijebu Connect</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
     body { font-family:'Plus Jakarta Sans',sans-serif; background:#f8fafc; color:#0f172a; padding:20px; margin:0; }
@@ -1579,7 +1909,7 @@ window.onload = loadDashboard;
 
 @app.route('/')
 def main_app():
-    return render_template_string(INDEX_TEMPLATE)
+    return render_template_string(INDEX_TEMPLATE, contact_email=CONTACT_EMAIL)
 
 @app.route('/auth')
 def auth_app():
@@ -1593,3 +1923,4 @@ def admin_app():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+    
