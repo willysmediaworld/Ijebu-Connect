@@ -51,6 +51,13 @@ ALLOWED_EXTENSIONS = ALLOWED_IMAGE_EXTS.union(ALLOWED_VIDEO_EXTS)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# HTTP CACHING & SPEED OPTIMIZATION FOR STATIC ASSETS
+@app.after_request
+def add_header(response):
+    if request.path.startswith('/static/'):
+        response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+    return response
+
 # ======================================================================
 # DATABASE ENGINE & NON-DESTRUCTIVE MIGRATION
 # ======================================================================
@@ -65,7 +72,6 @@ def get_db():
             db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ijebu_connect.db')
             g.db = sqlite3.connect(db_path)
             g.db.row_factory = sqlite3.Row
-            # Speed Optimizations for SQLite on Pyroid 3 / Mobile
             g.db.execute("PRAGMA journal_mode = WAL;")
             g.db.execute("PRAGMA synchronous = NORMAL;")
     return g.db
@@ -83,7 +89,6 @@ def generate_ref_code():
     return 'CPN' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
 
 def safe_add_column(cursor, table, column, col_type):
-    """Safely appends a new column to existing database tables without removing data."""
     try:
         cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
     except Exception:
@@ -104,7 +109,6 @@ def add_notification(user_id, sender_id, notif_type, target_id, message):
     db.commit()
 
 def count_user_listings(user_id):
-    """Counts total active product listings and advert posts created by a user."""
     db = get_db()
     cursor = db.cursor()
     p = query_param()
@@ -118,7 +122,6 @@ def count_user_listings(user_id):
     return prod_count + ad_post_count
 
 def init_db():
-    """Initializes tables and indexes non-destructively. Existing data is preserved."""
     with app.app_context():
         db = get_db()
         cursor = db.cursor()
@@ -320,7 +323,7 @@ def init_db():
             UNIQUE(blocker_id, blocked_id)
         )''')
 
-        # SPEED OPTIMIZATION INDEXES
+        # INDEX OPTIMIZATIONS
         try:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users (LOWER(username))")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_phone ON users (phone)")
@@ -895,7 +898,6 @@ def handle_products():
         me = cursor.fetchone()
         user_type = me['user_type'] if me else 'Resident'
 
-        # ENFORCE FREEMIUM 2-FREE-LISTINGS LIMIT
         if user_type == 'Resident':
             used_listings = count_user_listings(uid)
             if used_listings >= 2:
@@ -1029,7 +1031,6 @@ def handle_posts():
         if not content and not image_url and not video_url:
             return jsonify({'success': False, 'message': 'Write something or attach image/video.'}), 400
 
-        # ADVERT DETECTION & FREEMIUM RULE FOR FEED POSTS
         is_advert = '[PRODUCT_ADVERT]' in content or 'wa.me' in content.lower()
         if is_advert and user_type == 'Resident':
             used_listings = count_user_listings(uid)
@@ -1493,7 +1494,7 @@ def manage_payouts():
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 # ======================================================================
-# FRONTEND TEMPLATE & DYNAMIC OPEN GRAPH META PREVIEWS
+# FRONTEND TEMPLATE & WHATSAPP/FACEBOOK PREVIEW ENGINE
 # ======================================================================
 INDEX_TEMPLATE = r"""
 <!DOCTYPE html>
@@ -1502,16 +1503,42 @@ INDEX_TEMPLATE = r"""
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 
-<!-- DYNAMIC OPEN GRAPH META TAGS FOR WHATSAPP/FACEBOOK PREVIEWS -->
+<!-- COMPREHENSIVE OPENGRAPH & SOCIAL PREVIEW META TAGS -->
 <title>{{ meta_title }}</title>
 <meta name="description" content="{{ meta_desc }}">
+
+<!-- Open Graph (WhatsApp, Facebook, LinkedIn) -->
 <meta property="og:site_name" content="Ijebu Connect">
 <meta property="og:title" content="{{ meta_title }}">
 <meta property="og:description" content="{{ meta_desc }}">
 <meta property="og:image" content="{{ meta_image }}">
+<meta property="og:image:secure_url" content="{{ meta_image }}">
+<meta property="og:image:type" content="image/jpeg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
 <meta property="og:url" content="{{ meta_url }}">
 <meta property="og:type" content="website">
+
+<!-- Twitter Cards -->
 <meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="{{ meta_title }}">
+<meta name="twitter:description" content="{{ meta_desc }}">
+<meta name="twitter:image" content="{{ meta_image }}">
+
+<!-- Legacy Image Source (Nairaland & Older Bots) -->
+<link rel="image_src" href="{{ meta_image }}">
+
+<!-- Schema.org JSON-LD Structured Data (Google & News Bots) -->
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  "name": "{{ meta_title }}",
+  "description": "{{ meta_desc }}",
+  "image": "{{ meta_image }}",
+  "url": "{{ meta_url }}"
+}
+</script>
 
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -1601,7 +1628,13 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 .suggestion-card h5 { font-size: 0.78rem; font-weight: 800; color: var(--navy-blue); line-height: 1.2; text-overflow: ellipsis; overflow: hidden; white-space: nowrap; }
 .suggestion-card p { font-size: 0.68rem; color: var(--text-muted); margin-bottom: 6px; }
 .suggestion-card button { background: var(--navy-blue); color: #fff; border: none; padding: 4px 10px; border-radius: 6px; font-size: 0.7rem; font-weight: 700; cursor: pointer; width: 100%; min-height: 32px; }
+
+/* SHARED TARGET HIGHLIGHT CARD */
+.shared-target-card { border: 2px solid var(--emerald-green) !important; background: #f0fdf4 !important; }
 </style>
+<script>
+  window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
+</script>
 </head>
 <body>
 <div id="toast-container"></div>
@@ -1632,6 +1665,9 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 </div>
 
 <div class="app-container">
+  <!-- INSTANT DEEP LINK TARGET CONTAINER (0ms RENDER ON SOCIAL MEDIA CLICK) -->
+  <div id="deep-link-target-container"></div>
+
   <!-- SEARCH RESULTS VIEW -->
   <div id="view-search" class="view-section">
     <h3 style="font-size:1rem;margin-bottom:8px;">Search Results</h3>
@@ -1651,7 +1687,6 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
       <form onsubmit="handlePostSubmit(event, 'Social')">
         <textarea class="form-control" id="post-content" rows="2" placeholder="What's happening in Ijebu today?..."></textarea>
         
-        <!-- NON-PARTNER ADVERT TOGGLE (SUBJECT TO 2 FREE LIMIT) -->
         <div style="margin: 8px 0; padding: 8px; background: #f1f5f9; border-radius: 10px;">
           <div style="display:flex; align-items:center; gap:8px; cursor:pointer;" onclick="toggleProductAttach()">
             <input type="checkbox" id="attach-product-check">
@@ -2153,7 +2188,6 @@ async function handlePostSubmit(e, postType, groupId = 0) {
   const contentEl = postType === 'Event' ? document.getElementById('event-content') : document.getElementById('post-content');
   let content = contentEl.value.trim();
 
-  // NON-PARTNER ADVERT DETECTOR
   const attachCheck = document.getElementById('attach-product-check');
   if (attachCheck && attachCheck.checked) {
     const title = document.getElementById('post-prod-title').value.trim();
@@ -2866,10 +2900,47 @@ function handleNotifClick(type, targetId, senderUsername) {
   }
 }
 
+// INSTANT DEEP LINK RENDERER (0ms WAIT TIME ON FACEBOOK/WHATSAPP CLICK)
+function checkDeepLinkTarget() {
+  if (window.INITIAL_DEEP_LINK_DATA) {
+    const data = window.INITIAL_DEEP_LINK_DATA;
+    const targetBox = document.getElementById('deep-link-target-container');
+    if (!targetBox) return;
+
+    if (data.type === 'post') {
+      const p = data.item;
+      targetBox.innerHTML = `
+        <div class="card shared-target-card" style="margin-bottom:1rem;">
+          <div style="font-size:0.75rem; font-weight:800; color:var(--emerald-green); margin-bottom:6px;">📌 Shared Content Preview</div>
+          ${renderPostCard(p)}
+        </div>`;
+    } else if (data.type === 'product') {
+      const p = data.item;
+      let mediaBox = '<i class="fa-solid fa-store"></i>';
+      if (p.image_url) mediaBox = `<img src="${p.image_url}" style="width:100%;height:100%;object-fit:cover;">`;
+      
+      targetBox.innerHTML = `
+        <div class="card shared-target-card" style="margin-bottom:1rem;">
+          <div style="font-size:0.75rem; font-weight:800; color:var(--emerald-green); margin-bottom:6px;">📌 Shared Product / Listing</div>
+          <div class="product-card" style="border-bottom:none; margin-bottom:0; padding-bottom:0;">
+            <div class="product-img-box">${mediaBox}</div>
+            <div style="flex:1;">
+              <h4 style="font-weight:800; color:var(--navy-blue); font-size:0.95rem;">${p.title}</h4>
+              <div style="font-weight:800; color:var(--emerald-green); font-size:0.9rem;">₦${parseFloat(p.price).toLocaleString()}</div>
+              <div style="font-size:0.75rem; color:var(--text-muted);">${p.category} • By @${p.seller_username}</div>
+            </div>
+            <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" class="btn-whatsapp"><i class="fa-brands fa-whatsapp"></i> Chat</a>
+          </div>
+        </div>`;
+    }
+  }
+}
+
 window.onload = function() {
+  checkDeepLinkTarget();
   checkSession();
   loadPosts('Social', 'feed-posts-container');
-  setInterval(refreshUnread, 8000);
+  setInterval(refreshUnread, 10000);
 };
 </script>
 </body>
@@ -3193,7 +3264,7 @@ loadAdmin();
 """
 
 # ======================================================================
-# ROUTE HANDLERS WITH DYNAMIC OPEN GRAPH META INJECTION
+# ROUTE HANDLERS WITH DYNAMIC OPEN GRAPH META PREVIEWS
 # ======================================================================
 @app.route('/')
 def index():
@@ -3201,37 +3272,56 @@ def index():
     cursor = db.cursor()
     p = query_param()
 
+    # Guarantee HTTPS Host URL for Facebook & WhatsApp Crawlers
+    host_url = request.host_url
+    if not host_url.startswith('https://') and 'localhost' not in host_url and '127.0.0.1' not in host_url:
+        host_url = host_url.replace('http://', 'https://')
+
     meta_title = "Ijebu Connect - Mobile Hub"
     meta_desc = "The unified digital hub connecting sons and daughters of Ijebu land. Connect, trade, and build community."
-    meta_image = f"{request.host_url}static/uploads/default_banner.jpg"
+    meta_image = f"{host_url.rstrip('/')}/static/uploads/default_preview.jpg"
     meta_url = request.url
+    deep_link_data = None
 
-    # Dynamic Preview for Shared Post Link (?post=ID)
+    # Dynamic WhatsApp/Facebook Preview for Shared Post Link (?post=ID)
     post_id = request.args.get('post')
     if post_id:
         try:
-            cursor.execute(f"SELECT p.content, p.image_url, u.full_name FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = {p}", (post_id,))
-            post_row = cursor.fetchone()
-            if post_row:
-                meta_title = f"{post_row['full_name']} on Ijebu Connect"
-                clean_txt = post_row['content'].split('[PRODUCT_ADVERT]')[0] if '[PRODUCT_ADVERT]' in post_row['content'] else post_row['content']
-                meta_desc = clean_txt[:150] or "Check out this post on Ijebu Connect!"
-                if post_row['image_url']:
-                    meta_image = request.host_url.rstrip('/') + post_row['image_url']
+            cursor.execute(f'''
+                SELECT p.id, p.content, p.image_url, p.video_url, p.created_at,
+                       u.full_name, u.username, u.avatar_url
+                FROM posts p JOIN users u ON p.user_id = u.id
+                WHERE p.id = {p}
+            ''', (post_id,))
+            row = cursor.fetchone()
+            if row:
+                r = dict(row)
+                meta_title = f"{r['full_name']} on Ijebu Connect"
+                clean_txt = r['content'].split('[PRODUCT_ADVERT]')[0] if '[PRODUCT_ADVERT]' in r['content'] else r['content']
+                meta_desc = clean_txt[:150] if clean_txt else "Check out this post on Ijebu Connect!"
+                if r['image_url']:
+                    meta_image = host_url.rstrip('/') + r['image_url']
+                deep_link_data = {'type': 'post', 'item': r}
         except Exception:
             pass
 
-    # Dynamic Preview for Shared Product Link (?product=ID)
+    # Dynamic WhatsApp/Facebook Preview for Shared Product Link (?product=ID)
     product_id = request.args.get('product')
     if product_id:
         try:
-            cursor.execute(f"SELECT title, price, description, image_url FROM products WHERE id = {p}", (product_id,))
-            prod_row = cursor.fetchone()
-            if prod_row:
-                meta_title = f"₦{float(prod_row['price']):,.2f} - {prod_row['title']}"
-                meta_desc = prod_row['description'][:150] or "Available now on Ijebu Connect Marketplace!"
-                if prod_row['image_url']:
-                    meta_image = request.host_url.rstrip('/') + prod_row['image_url']
+            cursor.execute(f'''
+                SELECT p.*, u.full_name AS seller_name, u.username AS seller_username
+                FROM products p JOIN users u ON p.user_id = u.id
+                WHERE p.id = {p}
+            ''', (product_id,))
+            row = cursor.fetchone()
+            if row:
+                r = dict(row)
+                meta_title = f"₦{float(r['price']):,.2f} - {r['title']}"
+                meta_desc = r['description'][:150] if r['description'] else "Available on Ijebu Connect Marketplace!"
+                if r['image_url']:
+                    meta_image = host_url.rstrip('/') + r['image_url']
+                deep_link_data = {'type': 'product', 'item': r}
         except Exception:
             pass
 
@@ -3241,7 +3331,8 @@ def index():
         meta_title=meta_title,
         meta_desc=meta_desc,
         meta_image=meta_image,
-        meta_url=meta_url
+        meta_url=meta_url,
+        deep_link_json=json.dumps(deep_link_data) if deep_link_data else 'null'
     )
 
 @app.route('/auth')
