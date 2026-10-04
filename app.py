@@ -87,6 +87,9 @@ def safe_add_column(cursor, table, column, col_type):
 def add_notification(user_id, sender_id, notif_type, target_id, message):
     if user_id == sender_id or not user_id:
         return
+    # Message alerts are routed ONLY to Chat icon badge, NOT the Bell notification center.
+    if notif_type == 'message':
+        return
     db = get_db()
     cursor = db.cursor()
     p = query_param()
@@ -360,6 +363,11 @@ Disallow: /api/
 Sitemap: {}sitemap.xml
 """.format(request.host_url)
     return Response(content, mimetype='text/plain')
+
+# GOOGLE SEARCH CONSOLE VERIFICATION ROUTE (OPTION 1)
+@app.route('/google6c2b1a5f4a3ee8d9.html')
+def google_verification():
+    return "google-site-verification: google6c2b1a5f4a3ee8d9.html"
 
 @app.route('/sitemap.xml')
 def sitemap_xml():
@@ -1190,12 +1198,16 @@ def chat_partners():
     db = get_db(); cursor = db.cursor(); p = query_param()
     uid = session['user_id']
 
-    # 1. Existing conversations
+    # 1. Active conversation threads
     cursor.execute(f'''
-        SELECT CASE WHEN sender_id = {p} THEN receiver_id ELSE sender_id END AS other_id, MAX(id) AS last_id
-        FROM messages WHERE sender_id = {p} OR receiver_id = {p}
-        GROUP BY other_id ORDER BY MAX(id) DESC
-    ''', (uid, uid))
+        SELECT
+            CASE WHEN sender_id = {p} THEN receiver_id ELSE sender_id END AS other_id,
+            MAX(id) AS last_id
+        FROM messages
+        WHERE sender_id = {p} OR receiver_id = {p}
+        GROUP BY CASE WHEN sender_id = {p} THEN receiver_id ELSE sender_id END
+        ORDER BY last_id DESC
+    ''', (uid, uid, uid, uid))
 
     partners = []
     chatted_ids = set()
@@ -1221,7 +1233,7 @@ def chat_partners():
             'unread': unread
         })
 
-    # 2. Friends / Connections without chat history yet
+    # 2. Connections / Followers available for fresh chat
     friends = []
     try:
         cursor.execute(f'''
@@ -1263,7 +1275,6 @@ def chat_thread(username):
 
         cursor.execute(f"INSERT INTO messages (sender_id, receiver_id, content) VALUES ({p}, {p}, {p})", (uid, other_id, content))
         db.commit()
-        add_notification(other_id, uid, 'message', uid, f"New message from {session['full_name']}")
         return jsonify({'success': True, 'message': 'Sent.'})
 
     cursor.execute(f"UPDATE messages SET is_read = 1 WHERE sender_id = {p} AND receiver_id = {p}", (other_id, uid))
