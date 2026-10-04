@@ -50,7 +50,7 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # ======================================================================
-# DATABASE ENGINE
+# DATABASE ENGINE (NON-DESTRUCTIVE FOR DATA PERSISTENCE)
 # ======================================================================
 def get_db():
     if 'db' not in g:
@@ -1208,7 +1208,7 @@ def block_user(username):
         return jsonify({'success': True, 'blocked': True, 'message': 'User blocked.'})
 
 # ======================================================================
-# ADMIN API (WITH TREASURY WALLET ENGINE)
+# ADMIN API (WITH POST MODERATION & TREASURY ENGINE)
 # ======================================================================
 @app.route('/api/admin/overview', methods=['GET'])
 def get_admin_overview():
@@ -1265,13 +1265,44 @@ def admin_manage_users():
         user_id = request.args.get('user_id')
         if not user_id:
             return jsonify({'success': False, 'message': 'User ID required.'}), 400
+        
+        # Cascading clean removal
+        cursor.execute(f"DELETE FROM comments WHERE user_id = {p}", (user_id,))
+        cursor.execute(f"DELETE FROM post_likes WHERE user_id = {p}", (user_id,))
         cursor.execute(f"DELETE FROM posts WHERE user_id = {p}", (user_id,))
         cursor.execute(f"DELETE FROM products WHERE user_id = {p}", (user_id,))
+        cursor.execute(f"DELETE FROM messages WHERE sender_id = {p} OR receiver_id = {p}", (user_id, user_id))
+        cursor.execute(f"DELETE FROM followers WHERE follower_id = {p} OR followed_id = {p}", (user_id, user_id))
         cursor.execute(f"DELETE FROM users WHERE id = {p}", (user_id,))
         db.commit()
-        return jsonify({'success': True, 'message': 'User account removed.'})
+        return jsonify({'success': True, 'message': 'Member and all associated data completely removed.'})
 
     cursor.execute("SELECT id, full_name, username, phone, user_type, referral_code, created_at FROM users ORDER BY id DESC")
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+@app.route('/api/admin/posts', methods=['GET', 'DELETE'])
+def admin_manage_posts():
+    admin, err = require_admin()
+    if err: return err
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'DELETE':
+        post_id = request.args.get('post_id')
+        if not post_id:
+            return jsonify({'success': False, 'message': 'Post ID required.'}), 400
+        
+        cursor.execute(f"DELETE FROM comments WHERE post_id = {p}", (post_id,))
+        cursor.execute(f"DELETE FROM post_likes WHERE post_id = {p}", (post_id,))
+        cursor.execute(f"DELETE FROM posts WHERE id = {p}", (post_id,))
+        db.commit()
+        return jsonify({'success': True, 'message': 'Post removed successfully.'})
+
+    cursor.execute(f'''
+    SELECT p.id, p.content, p.post_type, p.image_url, p.created_at, u.full_name, u.username
+    FROM posts p JOIN users u ON p.user_id = u.id ORDER BY p.id DESC LIMIT 100
+    ''')
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 @app.route('/api/admin/partner-requests', methods=['GET', 'POST'])
@@ -1393,7 +1424,7 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 .search-input { width: 100%; padding: 10px 14px; border-radius: 20px; border: 1.5px solid var(--border-light); font-size: 0.85rem; outline: none; background: #f8fafc; }
 
 /* MOBILE BOTTOM NAV BAR */
-.mobile-bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1.5px solid var(--border-light); display: flex; justify-content: space-around; padding: 6px 0; z-index: 1000; height: 60px; }
+.mobile-bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1.5px solid var(--border-light); display: flex; justify-around: space-around; padding: 6px 0; z-index: 1000; height: 60px; }
 .nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); font-size: 0.7rem; font-weight: 700; flex: 1; cursor: pointer; text-decoration: none; }
 .nav-item i { font-size: 1.2rem; margin-bottom: 2px; }
 .nav-item.active { color: var(--navy-blue); }
@@ -2187,7 +2218,7 @@ async function openProfile(username) {
       <div style="display:flex;gap:6px;margin-top:8px;">
         ${isSelf ? `<button onclick="openEditProfileModal()" style="background:var(--navy-blue);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;flex:1;cursor:pointer;">✏️ Edit Profile</button>` : `
           <button onclick="toggleFollow('${u.username}')" style="background:var(--navy-blue);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;flex:1;cursor:pointer;">${u.is_following ? 'Unfollow' : 'Follow'}</button>
-          <button onclick="openChatThread('${u.username}')" style="background:var(--emerald-green);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;flex:1;cursor:pointer;">💬 Message</button>
+          <button onclick="startChatFromProfile('${u.username}')" style="background:var(--emerald-green);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;flex:1;cursor:pointer;">💬 Message</button>
         `}
       </div>
     </div>
@@ -2196,6 +2227,11 @@ async function openProfile(username) {
     ${postsHtml}
   `;
   switchNav('profile');
+}
+
+function startChatFromProfile(username) {
+  switchNav('chat');
+  openChatThread(username);
 }
 
 async function toggleFollow(username) {
@@ -2410,8 +2446,8 @@ body { background: #f8fafc; color: #0f172a; display: flex; flex-direction: colum
 <!-- INFORMATIONAL SECTIONS FOR VISITORS -->
 <div class="info-section">
   <div class="info-card">
-    <h4 style="color:var(--navy-blue);font-weight:800;margin-bottom:4px;"><i class="fa-solid fa-earth-africa"></i> About Ijebu Connect</h4>
-    <p>The unified digital hub connecting sons and daughters of Ijebu land, both at home and in the diaspora. Trade, network, build communities, and celebrate our heritage together!</p>
+    <h4 style="color:var(--navy-blue);font-weight:800;margin-bottom:4px;"><i class="fa-solid fa-earth-africa"></i> About Ijebu Connect Network</h4>
+    <p>The unified digital hub connecting sons and daughters of Ijebu land, both at home and in the diaspora. Trade, network, build communities, and celebrate our cultural heritage together!</p>
   </div>
 </div>
 
@@ -2530,6 +2566,7 @@ th { background:#0b1e36; color:#fff; }
 <div class="admin-tabs">
   <button class="admin-tab active" onclick="switchAdminTab('partners')">CPN Payment Claims</button>
   <button class="admin-tab" onclick="switchAdminTab('members')">Manage Members</button>
+  <button class="admin-tab" onclick="switchAdminTab('posts')">Manage Posts</button>
   <button class="admin-tab" onclick="switchAdminTab('payouts')">Bank Cashouts</button>
 </div>
 
@@ -2551,7 +2588,16 @@ th { background:#0b1e36; color:#fff; }
   </table>
 </div>
 
-<!-- TAB 3: BANK CASHOUTS -->
+<!-- TAB 3: POST MODERATION -->
+<div id="adm-posts" class="tab-sec">
+  <h3>All Platform Posts & Content</h3>
+  <table>
+    <thead><tr><th>Author</th><th>Post Content</th><th>Type</th><th>Action</th></tr></thead>
+    <tbody id="posts-body"></tbody>
+  </table>
+</div>
+
+<!-- TAB 4: BANK CASHOUTS -->
 <div id="adm-payouts" class="tab-sec">
   <h3>Member Cashout Requests</h3>
   <table>
@@ -2584,6 +2630,7 @@ async function loadAdmin() {
 
   loadPartnerRequests();
   loadMembers();
+  loadAdminPosts();
   loadPayouts();
 }
 
@@ -2628,14 +2675,37 @@ async function loadMembers() {
       <td>@${u.username}</td>
       <td>${u.phone}</td>
       <td><b>${u.user_type}</b></td>
-      <td>${u.user_type !== 'Admin' ? `<button class="btn-act btn-del" onclick="deleteMember(${u.id})">Delete</button>` : 'System Admin'}</td>
+      <td>${u.user_type !== 'Admin' ? `<button class="btn-act btn-del" onclick="deleteMember(${u.id})">Delete Member</button>` : 'System Admin'}</td>
     </tr>
   `).join('');
 }
 
 async function deleteMember(uid) {
-  if(!confirm('Remove this member?')) return;
+  if(!confirm('Remove this member and all associated posts, messages, and comments?')) return;
   const res = await fetch(`/api/admin/users?user_id=${uid}`, {method:'DELETE'});
+  const data = await res.json();
+  alert(data.message);
+  loadAdmin();
+}
+
+async function loadAdminPosts() {
+  const res = await fetch('/api/admin/posts');
+  const posts = await res.json();
+  const body = document.getElementById('posts-body');
+  if(!posts.length) { body.innerHTML = '<tr><td colspan="4">No posts published.</td></tr>'; return; }
+  body.innerHTML = posts.map(p => `
+    <tr>
+      <td><b>${p.full_name}</b><br><small>@${p.username}</small></td>
+      <td style="max-width:300px;">${p.content}</td>
+      <td><b>${p.post_type}</b></td>
+      <td><button class="btn-act btn-del" onclick="deleteAdminPost(${p.id})">Delete Post</button></td>
+    </tr>
+  `).join('');
+}
+
+async function deleteAdminPost(pid) {
+  if(!confirm('Delete this post and its comments?')) return;
+  const res = await fetch(`/api/admin/posts?post_id=${pid}`, {method:'DELETE'});
   const data = await res.json();
   alert(data.message);
   loadAdmin();
