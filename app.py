@@ -541,7 +541,7 @@ def get_current_user():
 @app.route('/api/auth/logout', methods=['POST'])
 def logout():
     session.clear()
-    return jsonify({'success': True, 'message': 'Logged out.'})
+    return jsonify({'success': True, 'message': 'Logged out successfully.'})
 
 # ======================================================================
 # GLOBAL SEARCH API
@@ -656,7 +656,7 @@ def handle_groups():
         group_id = cursor.lastrowid or 0
         cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (group_id, session['user_id']))
         db.commit()
-        return jsonify({'success': True, 'message': 'Group created successfully!'})
+        return jsonify({'success': True, 'message': f'Group "{name}" created successfully!'})
 
     cursor.execute(f'''
     SELECT g.*, COUNT(gm.id) AS member_count
@@ -1010,28 +1010,6 @@ def handle_comments(post_id):
     ''', (uid, post_id))
     return jsonify([dict(r) for r in cursor.fetchall()])
 
-@app.route('/api/comments/<int:comment_id>/like', methods=['POST'])
-def toggle_comment_like(comment_id):
-    if 'user_id' not in session:
-        return jsonify({'success': False, 'message': 'Login required.'}), 401
-    db = get_db()
-    cursor = db.cursor()
-    p = query_param()
-    uid = session['user_id']
-
-    cursor.execute(f"SELECT id FROM comment_likes WHERE comment_id = {p} AND user_id = {p}", (comment_id, uid))
-    existing = cursor.fetchone()
-    if existing:
-        cursor.execute(f"DELETE FROM comment_likes WHERE id = {p}", (existing['id'],))
-        liked = False
-    else:
-        cursor.execute(f"INSERT INTO comment_likes (comment_id, user_id) VALUES ({p}, {p})", (comment_id, uid))
-        liked = True
-    db.commit()
-
-    cursor.execute(f"SELECT COUNT(*) FROM comment_likes WHERE comment_id = {p}", (comment_id,))
-    return jsonify({'success': True, 'liked': liked, 'likes_count': cursor.fetchone()[0]})
-
 # ======================================================================
 # PUBLIC MEMBER PROFILE & WALL
 # ======================================================================
@@ -1072,6 +1050,7 @@ def get_user_profile(username):
     SELECT p.id, p.user_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
            u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
            (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
+           (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments_count,
            CASE WHEN EXISTS (SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}) THEN 1 ELSE 0 END AS liked_by_me
     FROM posts p JOIN users u ON p.user_id = u.id
     WHERE p.user_id = {p} ORDER BY p.id DESC
@@ -1094,7 +1073,7 @@ def get_user_profile(username):
     return jsonify({'success': True, 'user': res})
 
 # ======================================================================
-# CHAT API (FIXED THREAD RECEIVER ISSUE)
+# CHAT API
 # ======================================================================
 def _is_blocked(cursor, p, a, b):
     cursor.execute(f"SELECT 1 FROM blocked_users WHERE blocker_id = {p} AND blocked_id = {p}", (a, b))
@@ -1362,8 +1341,8 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 .brand-box { display: flex; align-items: center; gap: 8px; cursor: pointer; }
 .brand-title { font-size: 1.15rem; font-weight: 800; color: var(--navy-blue); line-height: 1.1; }
 .brand-title span { color: var(--emerald-green); }
-.header-actions { display: flex; align-items: center; gap: 10px; }
-.icon-btn { background: #f1f5f9; border: none; width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1rem; color: var(--navy-blue); position: relative; cursor: pointer; }
+.header-actions { display: flex; align-items: center; gap: 8px; }
+.icon-btn { background: #f1f5f9; border: none; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.95rem; color: var(--navy-blue); position: relative; cursor: pointer; }
 .badge-count { position: absolute; top: -2px; right: -2px; background: #ef4444; color: #fff; font-size: 0.65rem; font-weight: 800; padding: 2px 6px; border-radius: 10px; }
 
 /* TOP SCROLLABLE NAV PILLS */
@@ -1397,6 +1376,10 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 .avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 0.9rem; flex-shrink: 0; background-size: cover; background-position: center; }
 .post-actions { display: flex; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border-light); }
 .post-action { flex: 1; background: none; border: none; padding: 6px; border-radius: 8px; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; }
+
+/* FACEBOOK-STYLE PROFILE */
+.fb-cover-banner { height: 110px; background: linear-gradient(135deg, #0b1e36, #1e3a8a); border-radius: 12px 12px 0 0; position: relative; margin: -1rem -1rem 30px -1rem; }
+.fb-avatar-wrap { position: absolute; bottom: -25px; left: 16px; width: 64px; height: 64px; border-radius: 50%; border: 3px solid #fff; background: var(--emerald-green); overflow: hidden; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; font-weight: 800; }
 
 /* PRODUCT CARD */
 .product-card { display: flex; gap: 12px; align-items: center; border-bottom: 1px solid var(--border-light); padding-bottom: 12px; margin-bottom: 12px; }
@@ -1559,6 +1542,31 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
     <div id="profile-wall-container"></div>
   </div>
 
+</div>
+
+<!-- CREATE GROUP MODAL -->
+<div id="group-create-modal" class="modal-overlay">
+  <div class="card" style="max-width:420px;width:100%;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+      <h3 style="font-weight:800;color:var(--navy-blue);">Create Community Group</h3>
+      <button onclick="closeGroupModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+    </div>
+    <form onsubmit="handleGroupSubmit(event)">
+      <div class="form-group"><label>Group Name</label><input type="text" id="grp-name" class="form-control" placeholder="e.g. Ijebu Ode Entrepreneurs" required></div>
+      <div class="form-group">
+        <label>Category</label>
+        <select id="grp-cat" class="form-control">
+          <option value="Traders & Commerce">Traders & Commerce</option>
+          <option value="Diaspora Network">Diaspora Network</option>
+          <option value="Ojude Oba & Culture">Ojude Oba & Culture</option>
+          <option value="Agriculture & Farmers">Agriculture & Farmers</option>
+          <option value="General & Youth">General & Youth</option>
+        </select>
+      </div>
+      <div class="form-group"><label>Description</label><textarea id="grp-desc" class="form-control" rows="2" placeholder="Brief info about this community group..."></textarea></div>
+      <button type="submit" class="btn-submit">Create Group</button>
+    </form>
+  </div>
 </div>
 
 <!-- CPN UPGRADE MODAL -->
@@ -1733,10 +1741,21 @@ async function checkSession() {
 function renderHeaderAuth() {
   const box = document.getElementById('header-auth');
   if(currentUser) {
-    box.innerHTML = `<button onclick="openProfile('${currentUser.username}')" style="background:#f1f5f9;border:none;padding:6px 12px;border-radius:16px;font-weight:700;font-size:0.75rem;">@${currentUser.username}</button>`;
+    box.innerHTML = `
+      <button onclick="openProfile('${currentUser.username}')" style="background:#f1f5f9;border:none;padding:6px 10px;border-radius:16px;font-weight:700;font-size:0.75rem;">@${currentUser.username}</button>
+      <button onclick="handleLogout()" style="background:#ef4444;color:#fff;border:none;padding:6px 10px;border-radius:16px;font-weight:700;font-size:0.75rem;cursor:pointer;">Logout</button>
+    `;
   } else {
     box.innerHTML = `<a href="/auth" style="background:var(--navy-blue);color:#fff;text-decoration:none;padding:6px 12px;border-radius:16px;font-weight:700;font-size:0.75rem;">Sign In</a>`;
   }
+}
+
+async function handleLogout() {
+  await fetch('/api/auth/logout', {method: 'POST'});
+  currentUser = null;
+  renderHeaderAuth();
+  showToast('Logged out successfully.');
+  window.location.href = '/auth';
 }
 
 async function openNotifs() {
@@ -1828,7 +1847,7 @@ function renderPostCard(p) {
     <div class="post-header">
       <div class="avatar" style="background:var(--navy-blue);" onclick="openProfile('${p.username}')">${p.avatar_url ? `<img src="${p.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : p.full_name.charAt(0)}</div>
       <div>
-        <div style="font-size:0.85rem;font-weight:800;" onclick="openProfile('${p.username}')">${p.full_name}</div>
+        <div style="font-size:0.85rem;font-weight:800;cursor:pointer;" onclick="openProfile('${p.username}')">${p.full_name}</div>
         <div style="font-size:0.7rem;color:var(--text-muted);">@${p.username}</div>
       </div>
     </div>
@@ -1836,10 +1855,20 @@ function renderPostCard(p) {
     ${mediaHtml}
     <div class="post-actions">
       <button class="post-action" onclick="toggleLike(${p.id})">❤️ ${p.likes_count}</button>
-      <button class="post-action" onclick="toggleComments(${p.id})">💬 Comments</button>
+      <button class="post-action" onclick="toggleComments(${p.id})">💬 ${p.comments_count || 0} Comments</button>
+      <button class="post-action" onclick="sharePost('${p.full_name}', '${p.content.substring(0,30)}')">↪️ Share</button>
     </div>
     <div id="comments-box-${p.id}" class="comments-box" style="display:none;"></div>
   </div>`;
+}
+
+function sharePost(author, excerpt) {
+  if (navigator.share) {
+    navigator.share({ title: 'Ijebu Connect', text: `${author}: "${excerpt}..."`, url: window.location.href });
+  } else {
+    navigator.clipboard.writeText(window.location.href);
+    showToast('Post link copied to clipboard!');
+  }
 }
 
 async function toggleLike(pid) {
@@ -1925,6 +1954,24 @@ function openDatingSettingsModal() { if(!currentUser) return window.location.hre
 function closeDatingModal() { document.getElementById('dating-modal').style.display = 'none'; }
 function openCashoutModal() { document.getElementById('cashout-modal').style.display = 'flex'; }
 function closeCashoutModal() { document.getElementById('cashout-modal').style.display = 'none'; }
+function openGroupCreateModal() { if(!currentUser) return window.location.href = '/auth'; document.getElementById('group-create-modal').style.display = 'flex'; }
+function closeGroupModal() { document.getElementById('group-create-modal').style.display = 'none'; }
+
+async function handleGroupSubmit(e) {
+  e.preventDefault();
+  const name = document.getElementById('grp-name').value.trim();
+  const cat = document.getElementById('grp-cat').value;
+  const desc = document.getElementById('grp-desc').value.trim();
+
+  const res = await fetch('/api/groups', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({name, category: cat, description: desc})
+  });
+  const data = await res.json();
+  showToast(data.message);
+  if(data.success) { closeGroupModal(); loadGroups(); }
+}
 
 async function handleClaimBankTransfer(e) {
   e.preventDefault();
@@ -2010,7 +2057,7 @@ async function loadDatingMatches() {
         <div style="font-size:0.72rem;color:var(--emerald-green);font-weight:700;">${m.relationship_intent} • ${m.gender}</div>
         <div style="font-size:0.78rem;color:var(--text-muted);">"${m.bio || 'Living in Ijebu'}"</div>
       </div>
-      <button onclick="sendWink(${m.id})" style="background:#4f46e5;color:#fff;border:none;padding:6px 10px;border-radius:8px;font-weight:700;font-size:0.75rem;">Wink 👋</button>
+      <button onclick="sendWink(${m.id})" style="background:#4f46e5;color:#fff;border:none;padding:6px 10px;border-radius:8px;font-weight:700;font-size:0.75rem;cursor:pointer;">Wink 👋</button>
     </div>
   `).join('');
 }
@@ -2040,24 +2087,34 @@ async function openProfile(username) {
     <div class="card" style="background:linear-gradient(135deg, #0b1e36, #1e3a8a);color:#fff;">
       <div>Wallet Balance: <strong style="color:#f59e0b;font-size:1.1rem;">${formatNaira(u.wallet_balance)}</strong></div>
       <div style="font-size:0.78rem;margin:4px 0;">Referral Code: <b>${u.referral_code}</b> | Recruits: <b>${u.recruits_count}</b></div>
-      <button onclick="openCashoutModal()" style="background:#059669;color:#fff;border:none;padding:8px;border-radius:8px;width:100%;font-weight:800;font-size:0.8rem;margin-top:6px;">Request Bank Cashout</button>
+      <button onclick="openCashoutModal()" style="background:#059669;color:#fff;border:none;padding:8px;border-radius:8px;width:100%;font-weight:800;font-size:0.8rem;margin-top:6px;cursor:pointer;">Request Bank Cashout</button>
     </div>`;
   }
+
+  const postsHtml = u.posts.length 
+    ? u.posts.map(p => renderPostCard(p)).join('') 
+    : '<div class="card" style="text-align:center;color:var(--text-muted);">No posts published yet on wall.</div>';
+
+  const coverBg = u.cover_url ? `style="background-image:url('${u.cover_url}');background-size:cover;"` : '';
 
   const c = document.getElementById('profile-wall-container');
   c.innerHTML = `
     <div class="card">
-      <div style="display:flex;gap:10px;align-items:center;">
-        <div class="avatar" style="width:50px;height:50px;background:var(--navy-blue);">${u.avatar_url ? `<img src="${u.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : u.full_name.charAt(0)}</div>
+      <div class="fb-cover-banner" ${coverBg}>
+        <div class="fb-avatar-wrap">${u.avatar_url ? `<img src="${u.avatar_url}" style="width:100%;height:100%;object-fit:cover;">` : u.full_name.charAt(0)}</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;">
         <div>
-          <h3 style="font-size:1rem;font-weight:800;">${u.full_name} <span style="font-size:0.7rem;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:6px;">${u.user_type}</span></h3>
-          <p style="font-size:0.75rem;color:var(--text-muted);">@${u.username} • ${u.followers_count} Followers</p>
+          <h3 style="font-size:1.05rem;font-weight:800;">${u.full_name} <span style="font-size:0.65rem;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:6px;">${u.user_type}</span></h3>
+          <p style="font-size:0.75rem;color:var(--text-muted);">@${u.username} • <b>${u.followers_count}</b> Followers | <b>${u.following_count}</b> Following</p>
         </div>
       </div>
       <p style="font-size:0.82rem;margin:8px 0;">${u.bio || 'Resident of Ijebu'}</p>
-      ${isSelf ? `<button onclick="openEditProfileModal()" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;width:100%;">✏️ Edit Profile</button>` : `<button onclick="toggleFollow('${u.username}')" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;width:100%;">${u.is_following ? 'Unfollow' : 'Follow'}</button>`}
+      ${isSelf ? `<button onclick="openEditProfileModal()" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;width:100%;cursor:pointer;">✏️ Edit Profile Photos & Bio</button>` : `<button onclick="toggleFollow('${u.username}')" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;width:100%;cursor:pointer;">${u.is_following ? 'Unfollow' : 'Follow'}</button>`}
     </div>
     ${cpnWalletBlock}
+    <h4 style="font-size:0.9rem;margin:12px 0 6px;">Profile Wall Updates</h4>
+    ${postsHtml}
   `;
   switchNav('profile');
 }
@@ -2114,14 +2171,15 @@ async function loadGroups() {
   const res = await fetch('/api/groups');
   const groups = await res.json();
   const c = document.getElementById('groups-container');
-  if(!groups.length) { c.innerHTML = '<div class="card">No groups created yet.</div>'; return; }
+  if(!groups.length) { c.innerHTML = '<div class="card">No groups created yet. Click "+ Create Group" above to start one!</div>'; return; }
   c.innerHTML = groups.map(g => `
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
       <div>
-        <h4 style="font-weight:800;font-size:0.9rem;">${g.name}</h4>
+        <h4 style="font-weight:800;font-size:0.9rem;color:var(--navy-blue);">${g.name}</h4>
         <p style="font-size:0.75rem;color:var(--text-muted);">${g.category} • ${g.member_count} Members</p>
+        <small style="font-size:0.75rem;opacity:0.8;">${g.description || ''}</small>
       </div>
-      <button onclick="joinGroup(${g.id})" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;">Join Group</button>
+      <button onclick="joinGroup(${g.id})" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;cursor:pointer;">Join Group</button>
     </div>
   `).join('');
 }
@@ -2149,14 +2207,14 @@ async function loadChatPartners() {
   const data = await res.json();
   const c = document.getElementById('chat-partners-container');
   if(!data.success || !data.partners.length) {
-    c.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No messages yet.</div>`;
+    c.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No messages yet.<br><small>Visit any profile and tap "Message" to start chatting!</small></div>`;
     return;
   }
   c.innerHTML = data.partners.map(p => `
     <div onclick="openChatThread('${p.user.username}')" class="card" style="display:flex;gap:10px;align-items:center;cursor:pointer;">
       <div class="avatar" style="background:var(--navy-blue);">${p.user.avatar_url ? `<img src="${p.user.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : p.user.full_name.charAt(0)}</div>
       <div style="flex:1;">
-        <div style="font-weight:800;font-size:0.88rem;">${p.user.full_name}</div>
+        <div style="font-weight:800;font-size:0.88rem;color:var(--navy-blue);">${p.user.full_name}</div>
         <div style="font-size:0.75rem;color:var(--text-muted);">${p.last_message}</div>
       </div>
       ${p.unread ? `<span style="background:#ef4444;color:#fff;font-size:0.65rem;font-weight:800;padding:2px 6px;border-radius:10px;">${p.unread}</span>` : ''}
@@ -2225,12 +2283,13 @@ AUTH_TEMPLATE = r"""
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Auth - Ijebu Connect</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
 :root { --navy-blue: #0b1e36; --emerald-green: #059669; --border-light: #cbd5e1; }
 * { box-sizing: border-box; margin:0; padding:0; font-family:'Plus Jakarta Sans', sans-serif; }
-body { background: #f8fafc; color: #0f172a; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 1rem; }
-.auth-card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 18px; padding: 1.5rem; max-width: 400px; width: 100%; text-align: center; }
-.brand { font-size: 1.25rem; font-weight: 800; color: var(--navy-blue); margin-bottom: 0.2rem; }
+body { background: #f8fafc; color: #0f172a; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 1rem; }
+.auth-card { background: #fff; border: 1.5px solid var(--border-light); border-radius: 18px; padding: 1.5rem; max-width: 440px; width: 100%; text-align: center; box-shadow:0 8px 24px rgba(0,0,0,0.05); }
+.brand { font-size: 1.3rem; font-weight: 800; color: var(--navy-blue); margin-bottom: 0.2rem; }
 .brand span { color: var(--emerald-green); }
 .auth-tabs { display: flex; gap: 4px; margin: 1rem 0; background: #f1f5f9; padding: 4px; border-radius: 10px; }
 .auth-tab { flex: 1; padding: 8px; border-radius: 6px; border: none; font-weight: 700; font-size: 0.8rem; cursor: pointer; color: #64748b; background: transparent; }
@@ -2238,12 +2297,15 @@ body { background: #f8fafc; color: #0f172a; display: flex; justify-content: cent
 .form-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 0.85rem; text-align: left; }
 .form-control { padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--border-light); font-size: 0.88rem; outline: none; width: 100%; }
 .btn-submit { background: var(--emerald-green); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.88rem; cursor: pointer; width: 100%; margin-top: 4px; }
+.info-section { max-width:440px; width:100%; margin-top:1.25rem; font-size:0.8rem; text-align:left; color:#475569; }
+.info-card { background:#fff; border:1px solid #cbd5e1; border-radius:14px; padding:1rem; margin-bottom:0.75rem; }
 </style>
 </head>
 <body>
+
 <div class="auth-card">
   <div class="brand">IJEBU <span>CONNECT</span></div>
-  <p style="font-size:0.75rem;color:#64748b;font-style:italic;">Connect. Discover. Trade. Belong.</p>
+  <p style="font-size:0.78rem;color:#64748b;font-style:italic;">Connect. Discover. Trade. Belong.</p>
   
   <div class="auth-tabs">
     <button class="auth-tab active" id="tab-login" onclick="toggleAuth('login')">Sign In</button>
@@ -2264,6 +2326,18 @@ body { background: #f8fafc; color: #0f172a; display: flex; justify-content: cent
     <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Referral Code (Optional)</label><input type="text" id="reg-ref" class="form-control" placeholder="CPN00001"></div>
     <button type="submit" class="btn-submit">Create Free Account</button>
   </form>
+</div>
+
+<!-- INFORMATIONAL SECTIONS FOR VISITORS -->
+<div class="info-section">
+  <div class="info-card">
+    <h4 style="color:var(--navy-blue);font-weight:800;margin-bottom:4px;"><i class="fa-solid fa-earth-africa"></i> About Ijebu Connect</h4>
+    <p>The official digital network connecting residents across Ijebu-Ode, Sagamu, Remo, Ago-Iwoye, Ijebu-Igbo, and the global Ijebu Diaspora.</p>
+  </div>
+  <div class="info-card">
+    <h4 style="color:var(--emerald-green);font-weight:800;margin-bottom:4px;"><i class="fa-solid fa-sack-dollar"></i> CPN Partner Earnings System</h4>
+    <p>Earn <strong>10% Tier-1 and 5% Tier-2 instant commission rewards</strong> on every merchant or trader you invite to the network!</p>
+  </div>
 </div>
 
 <script>
