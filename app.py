@@ -50,7 +50,7 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # ======================================================================
-# DATABASE ENGINE & SPEED OPTIMIZATION
+# DATABASE ENGINE & NON-DESTRUCTIVE MIGRATION
 # ======================================================================
 def get_db():
     if 'db' not in g:
@@ -78,6 +78,7 @@ def generate_ref_code():
     return 'CPN' + ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
 
 def safe_add_column(cursor, table, column, col_type):
+    """Safely appends a new column to existing database tables without removing data."""
     try:
         cursor.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
     except Exception:
@@ -96,6 +97,7 @@ def add_notification(user_id, sender_id, notif_type, target_id, message):
     db.commit()
 
 def init_db():
+    """Initializes tables non-destructively. Existing data is 100% preserved."""
     with app.app_context():
         db = get_db()
         cursor = db.cursor()
@@ -209,8 +211,11 @@ def init_db():
             description TEXT DEFAULT '',
             category TEXT DEFAULT 'Community',
             avatar_url TEXT DEFAULT '',
+            cover_url TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
+        safe_add_column(cursor, 'groups', 'cover_url', "TEXT DEFAULT ''")
+        safe_add_column(cursor, 'groups', 'avatar_url', "TEXT DEFAULT ''")
 
         cursor.execute(f'''
         CREATE TABLE IF NOT EXISTS group_members (
@@ -308,7 +313,7 @@ def init_db():
 
         db.commit()
 
-        # ADMIN SEEDING
+        # ADMIN SEEDING (Safe)
         p = query_param()
         admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect').lower()
         admin_password = os.environ.get('ADMIN_SEED_PASSWORD', 'Rotimi1972connect')
@@ -542,6 +547,8 @@ def get_current_user():
             d['recruits_count'] = cursor.fetchone()[0]
             cursor.execute(f"SELECT COUNT(*) FROM notifications WHERE user_id = {p} AND is_read = 0", (d['id'],))
             d['unread_notifs'] = cursor.fetchone()[0]
+            cursor.execute(f"SELECT COUNT(*) FROM messages WHERE receiver_id = {p} AND is_read = 0", (d['id'],))
+            d['unread_chats'] = cursor.fetchone()[0]
             return jsonify({'logged_in': True, 'user': d})
     return jsonify({'logged_in': False})
 
@@ -562,7 +569,6 @@ def get_friend_suggestions():
     p = query_param()
     uid = session['user_id']
     
-    # Query non-followed users
     cursor.execute(f'''
         SELECT id, full_name, username, avatar_url, user_type, occupation
         FROM users
@@ -655,7 +661,7 @@ def toggle_follow(username):
     return jsonify({'success': True, 'following': following, 'message': msg})
 
 # ======================================================================
-# GROUPS (COMMUNITY HUBS) API
+# GROUPS (COMMUNITY HUBS) API & MEDIA UPDATES
 # ======================================================================
 @app.route('/api/groups', methods=['GET', 'POST'])
 def handle_groups():
@@ -670,12 +676,13 @@ def handle_groups():
         name = data.get('name', '').strip()
         desc = data.get('description', '').strip()
         avatar = data.get('avatar_url', '').strip()
+        cover = data.get('cover_url', '').strip()
 
         if not name:
             return jsonify({'success': False, 'message': 'Group name required.'}), 400
 
-        cursor.execute(f'''INSERT INTO groups (user_id, name, description, category, avatar_url)
-            VALUES ({p}, {p}, {p}, 'Community', {p})''', (session['user_id'], name, desc, avatar))
+        cursor.execute(f'''INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
+            VALUES ({p}, {p}, {p}, 'Community', {p}, {p})''', (session['user_id'], name, desc, avatar, cover))
         group_id = cursor.lastrowid or 0
         cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (group_id, session['user_id']))
         db.commit()
@@ -707,7 +714,48 @@ def get_group_detail(group_id):
     if not group:
         return jsonify({'success': False, 'message': 'Group not found.'}), 404
 
-    return jsonify({'success': True, 'group': dict(group)})
+    res = dict(group)
+    res['is_creator'] = (uid == group['user_id'])
+    return jsonify({'success': True, 'group': res})
+
+@app.route('/api/groups/<int:group_id>/update', methods=['POST'])
+def update_group_profile(group_id):
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+
+    cursor.execute(f"SELECT user_id FROM groups WHERE id = {p}", (group_id,))
+    grp = cursor.fetchone()
+    if not grp:
+        return jsonify({'success': False, 'message': 'Group not found.'}), 404
+
+    cursor.execute(f"SELECT user_type FROM users WHERE id = {p}", (uid,))
+    user_row = cursor.fetchone()
+    is_admin = user_row and user_row['user_type'] == 'Admin'
+
+    if grp['user_id'] != uid and not is_admin:
+        return jsonify({'success': False, 'message': 'Permission denied.'}), 403
+
+    data = request.json or {}
+    name = data.get('name', '').strip()
+    desc = data.get('description', '').strip()
+    avatar_url = data.get('avatar_url', '').strip()
+    cover_url = data.get('cover_url', '').strip()
+
+    if name:
+        cursor.execute(f"UPDATE groups SET name = {p} WHERE id = {p}", (name, group_id))
+    if desc is not None:
+        cursor.execute(f"UPDATE groups SET description = {p} WHERE id = {p}", (desc, group_id))
+    if avatar_url:
+        cursor.execute(f"UPDATE groups SET avatar_url = {p} WHERE id = {p}", (avatar_url, group_id))
+    if cover_url:
+        cursor.execute(f"UPDATE groups SET cover_url = {p} WHERE id = {p}", (cover_url, group_id))
+
+    db.commit()
+    return jsonify({'success': True, 'message': 'Group profile updated successfully!'})
 
 @app.route('/api/groups/<int:group_id>/join', methods=['POST'])
 def join_group(group_id):
@@ -921,7 +969,7 @@ def update_user_profile_media():
         cursor.execute(f"UPDATE users SET avatar_url = {p} WHERE id = {p}", (avatar_url, session['user_id']))
     if cover_url:
         cursor.execute(f"UPDATE users SET cover_url = {p} WHERE id = {p}", (cover_url, session['user_id']))
-    if bio:
+    if bio is not None and bio != '':
         cursor.execute(f"UPDATE users SET bio = {p} WHERE id = {p}", (bio, session['user_id']))
 
     db.commit()
@@ -1121,7 +1169,7 @@ def get_user_profile(username):
     return jsonify({'success': True, 'user': res})
 
 # ======================================================================
-# CHAT API
+# ENHANCED CHAT API WITH FRIENDS & DIRECT MESSAGING
 # ======================================================================
 def _is_blocked(cursor, p, a, b):
     cursor.execute(f"SELECT 1 FROM blocked_users WHERE blocker_id = {p} AND blocked_id = {p}", (a, b))
@@ -1142,15 +1190,18 @@ def chat_partners():
     db = get_db(); cursor = db.cursor(); p = query_param()
     uid = session['user_id']
 
+    # 1. Existing conversations
     cursor.execute(f'''
         SELECT CASE WHEN sender_id = {p} THEN receiver_id ELSE sender_id END AS other_id, MAX(id) AS last_id
         FROM messages WHERE sender_id = {p} OR receiver_id = {p}
         GROUP BY other_id ORDER BY MAX(id) DESC
     ''', (uid, uid))
 
-    result = []
+    partners = []
+    chatted_ids = set()
     for row in cursor.fetchall():
         other_id = row['other_id']
+        chatted_ids.add(other_id)
         last_id = row['last_id']
         cursor.execute(f"SELECT id, full_name, username, user_type, avatar_url FROM users WHERE id = {p}", (other_id,))
         u = cursor.fetchone()
@@ -1162,14 +1213,32 @@ def chat_partners():
         cursor.execute(f"SELECT COUNT(*) FROM messages WHERE sender_id = {p} AND receiver_id = {p} AND is_read = 0", (other_id, uid))
         unread = cursor.fetchone()[0]
 
-        result.append({
+        partners.append({
             'user': dict(u),
             'last_message': (m['content'] if m else '')[:60],
             'last_from_me': (m['sender_id'] == uid) if m else False,
             'last_time': str(m['created_at']) if m else '',
             'unread': unread
         })
-    return jsonify({'success': True, 'partners': result})
+
+    # 2. Friends / Connections without chat history yet
+    friends = []
+    try:
+        cursor.execute(f'''
+            SELECT DISTINCT u.id, u.full_name, u.username, u.avatar_url, u.user_type
+            FROM users u
+            JOIN followers f ON (f.follower_id = {p} AND f.followed_id = u.id) OR (f.followed_id = {p} AND f.follower_id = u.id)
+            WHERE u.id != {p}
+            LIMIT 15
+        ''', (uid, uid, uid))
+        all_friends = cursor.fetchall()
+        for f in all_friends:
+            if f['id'] not in chatted_ids:
+                friends.append(dict(f))
+    except Exception:
+        friends = []
+
+    return jsonify({'success': True, 'partners': partners, 'friends': friends})
 
 @app.route('/api/chat/<username>', methods=['GET', 'POST'])
 def chat_thread(username):
@@ -1423,7 +1492,7 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 .search-container { padding: 0.5rem 1rem; background: #fff; border-bottom: 1px solid var(--border-light); }
 .search-input { width: 100%; padding: 10px 14px; border-radius: 20px; border: 1.5px solid var(--border-light); font-size: 0.85rem; outline: none; background: #f8fafc; }
 .mobile-bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1.5px solid var(--border-light); display: flex; justify-content: space-around; padding: 6px 0; z-index: 1000; height: 60px; }
-.nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); font-size: 0.7rem; font-weight: 700; flex: 1; cursor: pointer; text-decoration: none; }
+.nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); font-size: 0.7rem; font-weight: 700; flex: 1; cursor: pointer; text-decoration: none; position: relative; }
 .nav-item i { font-size: 1.2rem; margin-bottom: 2px; }
 .nav-item.active { color: var(--navy-blue); }
 .app-container { max-width: 620px; margin: 0 auto; width: 100%; padding: 0.75rem; flex: 1; }
@@ -1605,14 +1674,22 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 <div id="dating-matches-container"></div>
 </div>
 
-<!-- CHAT -->
+<!-- CHAT PAGE -->
 <div id="view-chat" class="view-section">
 <div id="chat-list-wrap">
-<h3 style="font-size:1rem;font-weight:800;color:var(--navy-blue);margin-bottom:8px;">Messages</h3>
+<h3 style="font-size:1rem;font-weight:800;color:var(--navy-blue);margin-bottom:8px;">Messages & Conversations</h3>
+
+<!-- QUICK MESSAGING FOR FRIENDS/FOLLOWERS -->
+<div id="chat-friends-wrapper" style="display:none; margin-bottom: 12px;">
+<div style="font-size:0.75rem; font-weight:700; color:var(--text-muted); margin-bottom:6px;">Message Your Connections</div>
+<div id="chat-friends-container" class="suggestions-scroll"></div>
+</div>
+
 <div id="chat-partners-container"></div>
 </div>
+
 <div id="chat-thread-wrap" style="display:none;">
-<button onclick="closeChatThread()" style="background:#fff;border:1px solid var(--border-light);padding:4px 10px;border-radius:8px;font-size:0.75rem;font-weight:700;margin-bottom:8px;">← Back</button>
+<button onclick="closeChatThread()" style="background:#fff;border:1px solid var(--border-light);padding:4px 10px;border-radius:8px;font-size:0.75rem;font-weight:700;margin-bottom:8px;">← Back to Messages</button>
 <div id="chat-thread-header" class="card" style="padding:0.5rem 0.88rem;display:flex;justify-content:space-between;align-items:center;"></div>
 <div id="chat-messages" style="min-height:220px;max-height:50vh;overflow-y:auto;padding:6px 0;"></div>
 <form onsubmit="sendChatMessage(event)" style="position:sticky;bottom:0;background:var(--bg-body);padding:6px 0;">
@@ -1640,8 +1717,28 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 </div>
 <form onsubmit="handleGroupSubmit(event)">
 <div class="form-group"><label>Group Name</label><input type="text" id="grp-name" class="form-control" placeholder="e.g. Ijebu Traders Network" required></div>
+<div class="form-group"><label>Group Logo / Profile Photo</label><input type="file" id="grp-avatar-file" class="form-control" accept="image/*"></div>
+<div class="form-group"><label>Group Cover Photo</label><input type="file" id="grp-cover-file" class="form-control" accept="image/*"></div>
 <div class="form-group"><label>Description</label><textarea id="grp-desc" class="form-control" rows="2" placeholder="Tell members what this community group is all about..."></textarea></div>
 <button type="submit" class="btn-submit">Create Group</button>
+</form>
+</div>
+</div>
+
+<!-- EDIT GROUP MODAL -->
+<div id="edit-group-modal" class="modal-overlay">
+<div class="card" style="max-width:420px;width:100%;">
+<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+<h3 style="font-weight:800;color:var(--navy-blue);">Edit Group Profile</h3>
+<button onclick="closeEditGroupModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+</div>
+<form onsubmit="handleGroupUpdateSubmit(event)">
+<input type="hidden" id="edit-grp-id">
+<div class="form-group"><label>Group Name</label><input type="text" id="edit-grp-name" class="form-control" required></div>
+<div class="form-group"><label>Change Profile Photo / Logo</label><input type="file" id="edit-grp-avatar-file" class="form-control" accept="image/*"></div>
+<div class="form-group"><label>Change Cover Photo</label><input type="file" id="edit-grp-cover-file" class="form-control" accept="image/*"></div>
+<div class="form-group"><label>Description</label><textarea id="edit-grp-desc" class="form-control" rows="2"></textarea></div>
+<button type="submit" class="btn-submit">Save Group Changes</button>
 </form>
 </div>
 </div>
@@ -1691,16 +1788,16 @@ Amount: <b style="color:var(--amber-gold);">₦2,000</b>
 </div>
 </div>
 
-<!-- EDIT PROFILE MODAL -->
+<!-- EDIT MEMBER PROFILE MODAL -->
 <div id="edit-profile-modal" class="modal-overlay">
 <div class="card" style="max-width:420px;width:100%;">
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
-<h3 style="font-weight:800;color:var(--navy-blue);">Edit Profile</h3>
+<h3 style="font-weight:800;color:var(--navy-blue);">Edit Member Profile</h3>
 <button onclick="closeEditProfileModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
 </div>
 <form onsubmit="handleProfileUpdateSubmit(event)">
-<div class="form-group"><label>Profile Avatar</label><input type="file" id="edit-avatar-file" class="form-control" accept="image/*"></div>
-<div class="form-group"><label>Cover Banner</label><input type="file" id="edit-cover-file" class="form-control" accept="image/*"></div>
+<div class="form-group"><label>Profile Picture (Avatar)</label><input type="file" id="edit-avatar-file" class="form-control" accept="image/*"></div>
+<div class="form-group"><label>Cover Photo Banner</label><input type="file" id="edit-cover-file" class="form-control" accept="image/*"></div>
 <div class="form-group"><label>Bio</label><textarea id="edit-bio-text" class="form-control" rows="2"></textarea></div>
 <button type="submit" class="btn-submit">Save Changes</button>
 </form>
@@ -1749,7 +1846,10 @@ Amount: <b style="color:var(--amber-gold);">₦2,000</b>
 <div class="nav-item" data-nav="market" onclick="switchNav('market')"><i class="fa-solid fa-store"></i> Market</div>
 <div class="nav-item" data-nav="groups" onclick="switchNav('groups')"><i class="fa-solid fa-layer-group"></i> Groups</div>
 <div class="nav-item" data-nav="dating" onclick="switchNav('dating')"><i class="fa-solid fa-heart" style="color:#ef4444;"></i> Dating</div>
-<div class="nav-item" data-nav="chat" onclick="switchNav('chat')"><i class="fa-solid fa-comments"></i> Chat</div>
+<div class="nav-item" data-nav="chat" onclick="switchNav('chat')">
+<i class="fa-solid fa-comments"></i> Chat
+<span class="badge-count" id="chat-tab-badge" style="display:none; top:-4px; right:12px;">0</span>
+</div>
 </div>
 
 <script>
@@ -1863,7 +1963,7 @@ document.getElementById('notif-badge').style.display = 'none';
 
 function handleNotifClick(type, targetId, senderUsername) {
 if (type === 'message' || type === 'wink') {
-if (senderUsername) openChatThread(senderUsername);
+if (senderUsername) startChatFromProfile(senderUsername);
 else switchNav('chat');
 } else if (type === 'follow') {
 if (senderUsername) openProfile(senderUsername);
@@ -2123,19 +2223,56 @@ function openCashoutModal() { document.getElementById('cashout-modal').style.dis
 function closeCashoutModal() { document.getElementById('cashout-modal').style.display = 'none'; }
 function openGroupCreateModal() { if(!currentUser) return window.location.href = '/auth'; document.getElementById('group-create-modal').style.display = 'flex'; }
 function closeGroupModal() { document.getElementById('group-create-modal').style.display = 'none'; }
+function closeEditGroupModal() { document.getElementById('edit-group-modal').style.display = 'none'; }
 
 async function handleGroupSubmit(e) {
 e.preventDefault();
 const name = document.getElementById('grp-name').value.trim();
 const desc = document.getElementById('grp-desc').value.trim();
+const avatarInput = document.getElementById('grp-avatar-file');
+const coverInput = document.getElementById('grp-cover-file');
+
+let avatarUrl = '', coverUrl = '';
+if(avatarInput && avatarInput.files[0]) avatarUrl = (await uploadSelectedFile(avatarInput)).url;
+if(coverInput && coverInput.files[0]) coverUrl = (await uploadSelectedFile(coverInput)).url;
+
 const res = await fetch('/api/groups', {
 method: 'POST',
 headers: {'Content-Type':'application/json'},
-body: JSON.stringify({name, description: desc})
+body: JSON.stringify({name, description: desc, avatar_url: avatarUrl, cover_url: coverUrl})
 });
 const data = await res.json();
 showToast(data.message);
 if(data.success) { closeGroupModal(); loadGroups(); }
+}
+
+function openEditGroupModal(groupId, name, desc) {
+document.getElementById('edit-grp-id').value = groupId;
+document.getElementById('edit-grp-name').value = name;
+document.getElementById('edit-grp-desc').value = desc;
+document.getElementById('edit-group-modal').style.display = 'flex';
+}
+
+async function handleGroupUpdateSubmit(e) {
+e.preventDefault();
+const groupId = document.getElementById('edit-grp-id').value;
+const name = document.getElementById('edit-grp-name').value.trim();
+const desc = document.getElementById('edit-grp-desc').value.trim();
+const avatarInput = document.getElementById('edit-grp-avatar-file');
+const coverInput = document.getElementById('edit-grp-cover-file');
+
+let avatarUrl = '', coverUrl = '';
+if(avatarInput && avatarInput.files[0]) avatarUrl = (await uploadSelectedFile(avatarInput)).url;
+if(coverInput && coverInput.files[0]) coverUrl = (await uploadSelectedFile(coverInput)).url;
+
+const res = await fetch(`/api/groups/${groupId}/update`, {
+method: 'POST',
+headers: {'Content-Type':'application/json'},
+body: JSON.stringify({name, description: desc, avatar_url: avatarUrl, cover_url: coverUrl})
+});
+const data = await res.json();
+showToast(data.message);
+if(data.success) { closeEditGroupModal(); openGroupDetail(groupId); }
 }
 
 async function openGroupDetail(groupId) {
@@ -2147,17 +2284,29 @@ if(!data.success) return showToast(data.message, 'error');
 const g = data.group;
 document.getElementById('active-group-id').value = g.id;
 
+const groupCoverBg = g.cover_url ? `style="background-image:url('${g.cover_url}');background-size:cover;"` : '';
+const groupAvatarHtml = g.avatar_url ? `<img src="${g.avatar_url}" style="width:100%;height:100%;object-fit:cover;">` : `<i class="fa-solid fa-users"></i>`;
+
 document.getElementById('group-detail-header').innerHTML = `
-<div style="display:flex; justify-content:space-between; align-items:center;">
+<div class="fb-cover-banner" ${groupCoverBg}>
+<div class="fb-avatar-wrap">${groupAvatarHtml}</div>
+</div>
+<div style="display:flex; justify-content:space-between; align-items:flex-end;">
 <div>
 <h3 style="font-size:1.1rem; font-weight:800; color:var(--navy-blue);">${g.name}</h3>
 <p style="font-size:0.75rem; color:var(--text-muted);">${g.member_count} Members • Created by @${g.creator_username}</p>
-<p style="font-size:0.82rem; margin-top:4px;">${g.description || 'No description provided.'}</p>
 </div>
-<button onclick="joinGroup(${g.id})" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;cursor:pointer;">
+<div style="display:flex; gap:6px;">
+${(g.is_creator || (currentUser && currentUser.user_type === 'Admin')) ? `
+<button onclick="openEditGroupModal(${g.id}, '${g.name.replace(/'/g, "\\'")}', '${(g.description || '').replace(/'/g, "\\'")}')" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;cursor:pointer;">
+✏️ Edit Group
+</button>` : ''}
+<button onclick="joinGroup(${g.id})" style="background:${g.is_member ? '#ef4444' : 'var(--emerald-green)'};color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;cursor:pointer;">
 ${g.is_member ? 'Leave Group' : 'Join Group'}
 </button>
 </div>
+</div>
+<p style="font-size:0.82rem; margin-top:8px; color:var(--text-dark);">${g.description || 'No description provided.'}</p>
 `;
 
 if(g.is_member) {
@@ -2173,7 +2322,7 @@ async function handleGroupPostSubmit(e) {
 e.preventDefault();
 if(!currentUser) return window.location.href = '/auth';
 
-const groupId = int(document.getElementById('active-group-id').value);
+const groupId = parseInt(document.getElementById('active-group-id').value);
 const contentEl = document.getElementById('group-post-content');
 const content = contentEl.value.trim();
 if(!content) return showToast('Please enter post text', 'error');
@@ -2318,7 +2467,6 @@ cpnWalletBlock = `
 </div>`;
 }
 
-// MEMBER WALL COMPOSER
 let wallComposerHtml = '';
 if (isSelf) {
 wallComposerHtml = `
@@ -2353,7 +2501,7 @@ c.innerHTML = `
 </div>
 <p style="font-size:0.82rem;margin:8px 0;">${u.bio || 'Resident of Ijebu'}</p>
 <div style="display:flex;gap:6px;margin-top:8px;">
-${isSelf ? `<button onclick="openEditProfileModal()" style="background:var(--navy-blue);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;flex:1;cursor:pointer;">✏️ Edit Profile</button>` : `
+${isSelf ? `<button onclick="openEditProfileModal()" style="background:var(--navy-blue);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;flex:1;cursor:pointer;">✏️ Edit Profile Pictures</button>` : `
 <button onclick="toggleFollow('${u.username}')" style="background:var(--navy-blue);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;flex:1;cursor:pointer;">${u.is_following ? 'Unfollow' : 'Follow'}</button>
 <button onclick="startChatFromProfile('${u.username}')" style="background:var(--emerald-green);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;flex:1;cursor:pointer;">💬 Message</button>
 `}
@@ -2453,18 +2601,24 @@ const res = await fetch('/api/groups');
 const groups = await res.json();
 const c = document.getElementById('groups-container');
 if(!groups.length) { c.innerHTML = '<div class="card">No groups created yet. Click "+ Create Group" above to start one!</div>'; return; }
-c.innerHTML = groups.map(g => `
-<div class="card" style="display:flex;justify-content:space-between;align-items:center;">
-<div style="cursor:pointer;" onclick="openGroupDetail(${g.id})">
+c.innerHTML = groups.map(g => {
+const grpAvatar = g.avatar_url ? `<img src="${g.avatar_url}" style="width:42px;height:42px;border-radius:50%;object-fit:cover;flex-shrink:0;">` : `<div class="avatar" style="background:var(--navy-blue);width:42px;height:42px;flex-shrink:0;"><i class="fa-solid fa-users"></i></div>`;
+return `
+<div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+<div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="openGroupDetail(${g.id})">
+${grpAvatar}
+<div>
 <h4 style="font-weight:800;font-size:0.9rem;color:var(--navy-blue);">${g.name}</h4>
 <p style="font-size:0.75rem;color:var(--text-muted);">${g.member_count} Members</p>
 <small style="font-size:0.75rem;opacity:0.8;">${g.description || ''}</small>
 </div>
-<button onclick="openGroupDetail(${g.id})" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;cursor:pointer;">
+</div>
+<button onclick="openGroupDetail(${g.id})" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;cursor:pointer;flex-shrink:0;">
 Enter Group
 </button>
 </div>
-`).join('');
+`;
+}).join('');
 }
 
 async function joinGroup(groupId) {
@@ -2480,8 +2634,16 @@ if(!currentUser) return;
 try {
 const res = await fetch('/api/chat/unread');
 const data = await res.json();
-const badge = document.getElementById('notif-badge');
-if(badge && data.count > 0) { badge.innerText = data.count; badge.style.display='block'; }
+const chatBadge = document.getElementById('chat-tab-badge');
+
+if(chatBadge) {
+if(data.count > 0) {
+chatBadge.innerText = data.count;
+chatBadge.style.display = 'block';
+} else {
+chatBadge.style.display = 'none';
+}
+}
 } catch(e){}
 }
 
@@ -2489,8 +2651,29 @@ async function loadChatPartners() {
 const res = await fetch('/api/chat/partners');
 const data = await res.json();
 const c = document.getElementById('chat-partners-container');
+const friendsBox = document.getElementById('chat-friends-container');
+const friendsWrapper = document.getElementById('chat-friends-wrapper');
+
+// 1. Friends list for quick direct messaging
+if (data.friends && data.friends.length > 0) {
+friendsWrapper.style.display = 'block';
+friendsBox.innerHTML = data.friends.map(f => `
+<div class="suggestion-card" onclick="startChatFromProfile('${f.username}')" style="cursor:pointer;">
+<div class="avatar" style="background:var(--navy-blue);">
+${f.avatar_url ? `<img src="${f.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : f.full_name.charAt(0)}
+</div>
+<h5>${f.full_name}</h5>
+<p>@${f.username}</p>
+<button style="background:var(--emerald-green);">Message</button>
+</div>
+`).join('');
+} else {
+friendsWrapper.style.display = 'none';
+}
+
+// 2. Existing active conversations
 if(!data.success || !data.partners.length) {
-c.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No messages yet.<br><small>Visit any profile and tap "Message" to start chatting!</small></div>`;
+c.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No message history yet.<br><small>Pick a connection above or visit any wall to start chatting!</small></div>`;
 return;
 }
 c.innerHTML = data.partners.map(p => `
@@ -2515,14 +2698,29 @@ const res = await fetch(`/api/chat/${encodeURIComponent(username)}`);
 const data = await res.json();
 if(!data.success) return showToast(data.message, 'error');
 
-document.getElementById('chat-thread-header').innerHTML = `<b>${data.other.full_name}</b> (@${data.other.username})`;
+document.getElementById('chat-thread-header').innerHTML = `
+<div style="display:flex; align-items:center; gap:8px; cursor:pointer;" onclick="openProfile('${data.other.username}')">
+<div class="avatar" style="width:32px;height:32px;background:var(--navy-blue);font-size:0.8rem;">
+${data.other.avatar_url ? `<img src="${data.other.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : data.other.full_name.charAt(0)}
+</div>
+<div>
+<b>${data.other.full_name}</b> <small style="color:var(--text-muted);">(@${data.other.username})</small>
+</div>
+</div>`;
+
 const m = document.getElementById('chat-messages');
+if (!data.messages || data.messages.length === 0) {
+m.innerHTML = `<div style="text-align:center; color:var(--text-muted); font-size:0.8rem; margin-top:20px;">No message history yet. Send a message to start chatting!</div>`;
+} else {
 m.innerHTML = data.messages.map(msg => `
 <div class="chat-bubble ${msg.sender_id === data.me_id ? 'me' : 'them'}">
 ${msg.content}
 </div>
 `).join('');
+}
+
 m.scrollTop = m.scrollHeight;
+setTimeout(() => document.getElementById('chat-input').focus(), 100);
 refreshUnread();
 }
 
@@ -2550,7 +2748,7 @@ openChatThread(currentChatUser);
 window.onload = function() {
 checkSession();
 loadPosts('Social', 'feed-posts-container');
-setInterval(refreshUnread, 15000);
+setInterval(refreshUnread, 8000);
 };
 </script>
 </body>
