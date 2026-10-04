@@ -209,7 +209,7 @@ def init_db():
             user_id INTEGER NOT NULL,
             name TEXT NOT NULL,
             description TEXT DEFAULT '',
-            category TEXT DEFAULT 'General',
+            category TEXT DEFAULT 'Community',
             avatar_url TEXT DEFAULT '',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )''')
@@ -566,7 +566,7 @@ def global_search():
     cursor.execute(f"SELECT p.id, p.content, p.post_type, u.full_name, u.username FROM posts p JOIN users u ON p.user_id = u.id WHERE LOWER(p.content) LIKE {p} LIMIT 10", (term,))
     posts = [dict(r) for r in cursor.fetchall()]
 
-    cursor.execute(f"SELECT id, name, category, description, avatar_url FROM groups WHERE LOWER(name) LIKE {p} OR LOWER(category) LIKE {p} LIMIT 10", (term, term))
+    cursor.execute(f"SELECT id, name, category, description, avatar_url FROM groups WHERE LOWER(name) LIKE {p} OR LOWER(description) LIKE {p} LIMIT 10", (term, term))
     groups = [dict(r) for r in cursor.fetchall()]
 
     return jsonify({'users': users, 'products': products, 'posts': posts, 'groups': groups})
@@ -645,14 +645,13 @@ def handle_groups():
         data = request.json or {}
         name = data.get('name', '').strip()
         desc = data.get('description', '').strip()
-        cat = data.get('category', 'General').strip()
         avatar = data.get('avatar_url', '').strip()
 
         if not name:
             return jsonify({'success': False, 'message': 'Group name required.'}), 400
 
         cursor.execute(f'''INSERT INTO groups (user_id, name, description, category, avatar_url)
-        VALUES ({p}, {p}, {p}, {p}, {p})''', (session['user_id'], name, desc, cat, avatar))
+        VALUES ({p}, {p}, {p}, 'Community', {p})''', (session['user_id'], name, desc, avatar))
         group_id = cursor.lastrowid or 0
         cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (group_id, session['user_id']))
         db.commit()
@@ -1010,6 +1009,28 @@ def handle_comments(post_id):
     ''', (uid, post_id))
     return jsonify([dict(r) for r in cursor.fetchall()])
 
+@app.route('/api/comments/<int:comment_id>/like', methods=['POST'])
+def toggle_comment_like(comment_id):
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+
+    cursor.execute(f"SELECT id FROM comment_likes WHERE comment_id = {p} AND user_id = {p}", (comment_id, uid))
+    existing = cursor.fetchone()
+    if existing:
+        cursor.execute(f"DELETE FROM comment_likes WHERE id = {p}", (existing['id'],))
+        liked = False
+    else:
+        cursor.execute(f"INSERT INTO comment_likes (comment_id, user_id) VALUES ({p}, {p})", (comment_id, uid))
+        liked = True
+    db.commit()
+
+    cursor.execute(f"SELECT COUNT(*) FROM comment_likes WHERE comment_id = {p}", (comment_id,))
+    return jsonify({'success': True, 'liked': liked, 'likes_count': cursor.fetchone()[0]})
+
 # ======================================================================
 # PUBLIC MEMBER PROFILE & WALL
 # ======================================================================
@@ -1187,7 +1208,7 @@ def block_user(username):
         return jsonify({'success': True, 'blocked': True, 'message': 'User blocked.'})
 
 # ======================================================================
-# ADMIN API
+# ADMIN API (WITH TREASURY WALLET ENGINE)
 # ======================================================================
 @app.route('/api/admin/overview', methods=['GET'])
 def get_admin_overview():
@@ -1207,13 +1228,29 @@ def get_admin_overview():
     cursor.execute("SELECT COUNT(*) FROM partner_requests WHERE status = 'pending'")
     pending_partners = cursor.fetchone()[0]
 
+    # Admin Treasury Metrics
+    cursor.execute("SELECT COALESCE(SUM(amount), 0) FROM partner_requests WHERE status = 'approved'")
+    total_income = float(cursor.fetchone()[0] or 0)
+
+    cursor.execute("SELECT COALESCE(SUM(amount), 0) FROM payout_requests WHERE status = 'approved'")
+    total_payouts = float(cursor.fetchone()[0] or 0)
+
+    cursor.execute("SELECT COALESCE(SUM(amount), 0) FROM transactions WHERE tx_type LIKE '%CPN Commission%'")
+    total_commissions = float(cursor.fetchone()[0] or 0)
+
+    admin_net_balance = total_income - total_commissions
+
     return jsonify({
         'success': True,
         'total_users': total_users,
         'total_partners': total_partners,
         'total_products': total_products,
         'total_partner_wallets': total_wallets,
-        'pending_partners': pending_partners
+        'pending_partners': pending_partners,
+        'total_income': total_income,
+        'total_payouts': total_payouts,
+        'total_commissions': total_commissions,
+        'admin_net_balance': admin_net_balance
     })
 
 @app.route('/api/admin/users', methods=['GET', 'DELETE'])
@@ -1448,6 +1485,7 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
   <!-- SOCIAL FEED -->
   <div id="view-feed" class="view-section active">
     <div class="card">
+      <div id="composer-user-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"></div>
       <form onsubmit="handlePostSubmit(event, 'Social')">
         <textarea class="form-control" id="post-content" rows="2" placeholder="What's happening in Ijebu today?..."></textarea>
         <div style="display:flex;gap:8px;align-items:center;margin:8px 0;">
@@ -1552,18 +1590,8 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
       <button onclick="closeGroupModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
     </div>
     <form onsubmit="handleGroupSubmit(event)">
-      <div class="form-group"><label>Group Name</label><input type="text" id="grp-name" class="form-control" placeholder="e.g. Ijebu Ode Entrepreneurs" required></div>
-      <div class="form-group">
-        <label>Category</label>
-        <select id="grp-cat" class="form-control">
-          <option value="Traders & Commerce">Traders & Commerce</option>
-          <option value="Diaspora Network">Diaspora Network</option>
-          <option value="Ojude Oba & Culture">Ojude Oba & Culture</option>
-          <option value="Agriculture & Farmers">Agriculture & Farmers</option>
-          <option value="General & Youth">General & Youth</option>
-        </select>
-      </div>
-      <div class="form-group"><label>Description</label><textarea id="grp-desc" class="form-control" rows="2" placeholder="Brief info about this community group..."></textarea></div>
+      <div class="form-group"><label>Group Name</label><input type="text" id="grp-name" class="form-control" placeholder="e.g. Ijebu Traders Network" required></div>
+      <div class="form-group"><label>Description</label><textarea id="grp-desc" class="form-control" rows="2" placeholder="Tell members what this community group is all about..."></textarea></div>
       <button type="submit" class="btn-submit">Create Group</button>
     </form>
   </div>
@@ -1722,6 +1750,7 @@ async function checkSession() {
     if(data.logged_in) {
       currentUser = data.user;
       renderHeaderAuth();
+      renderComposerUserBar();
       if(currentUser.user_type === 'Admin') {
         document.getElementById('admin-pill').style.display = 'flex';
       }
@@ -1750,6 +1779,19 @@ function renderHeaderAuth() {
   }
 }
 
+function renderComposerUserBar() {
+  const bar = document.getElementById('composer-user-bar');
+  if(!bar) return;
+  if(currentUser) {
+    bar.innerHTML = `
+      <div class="avatar" style="width:34px;height:34px;background:var(--navy-blue);cursor:pointer;" onclick="openProfile('${currentUser.username}')">${currentUser.avatar_url ? `<img src="${currentUser.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : currentUser.full_name.charAt(0)}</div>
+      <div style="font-size:0.82rem;font-weight:800;color:var(--navy-blue);cursor:pointer;" onclick="openProfile('${currentUser.username}')">${currentUser.full_name}</div>
+    `;
+  } else {
+    bar.innerHTML = '';
+  }
+}
+
 async function handleLogout() {
   await fetch('/api/auth/logout', {method: 'POST'});
   currentUser = null;
@@ -1764,9 +1806,20 @@ async function openNotifs() {
   const notifs = await res.json();
   const c = document.getElementById('notifs-container');
   if(!notifs.length) { c.innerHTML = '<div class="card">No notifications yet.</div>'; return; }
-  c.innerHTML = notifs.map(n => `<div class="card" style="font-size:0.82rem;">${n.message}</div>`).join('');
+  c.innerHTML = notifs.map(n => `<div class="card" style="font-size:0.82rem;cursor:pointer;" onclick="handleNotifClick('${n.type}', ${n.target_id}, '${n.sender_username || ''}')">${n.message}</div>`).join('');
   fetch('/api/notifications', {method:'POST'});
   document.getElementById('notif-badge').style.display = 'none';
+}
+
+function handleNotifClick(type, targetId, senderUsername) {
+  if (type === 'message' || type === 'wink') {
+    if (senderUsername) openChatThread(senderUsername);
+    else switchNav('chat');
+  } else if (type === 'follow') {
+    if (senderUsername) openProfile(senderUsername);
+  } else {
+    switchNav('feed');
+  }
 }
 
 async function handleSearch() {
@@ -1886,13 +1939,35 @@ async function toggleComments(pid) {
   const comments = await res.json();
   box.innerHTML = `
     <div id="comment-list-${pid}">
-      ${comments.map(c => `<div class="comment-item"><span class="comment-user">@${c.username}:</span> ${c.content}</div>`).join('') || '<small>No comments yet.</small>'}
+      ${comments.map(c => `
+        <div class="comment-item">
+          <span class="comment-user" onclick="openProfile('${c.username}')" style="cursor:pointer;">@${c.username}:</span> ${c.content}
+          <div style="display:flex;gap:10px;margin-top:2px;font-size:0.72rem;color:var(--text-muted);">
+            <span onclick="toggleCommentLike(${c.id}, ${pid})" style="cursor:pointer;font-weight:700;">❤️ ${c.likes_count || 0}</span>
+            <span onclick="replyToUser('${c.username}', ${pid})" style="cursor:pointer;font-weight:700;">↩️ Reply</span>
+          </div>
+        </div>
+      `).join('') || '<small>No comments yet.</small>'}
     </div>
     <div style="display:flex;gap:4px;margin-top:6px;">
       <input type="text" id="comment-input-${pid}" class="form-control" placeholder="Write a comment..." style="padding:6px;font-size:0.78rem;">
       <button onclick="submitComment(${pid})" style="background:var(--emerald-green);color:#fff;border:none;padding:6px 10px;border-radius:8px;font-weight:700;font-size:0.75rem;">Post</button>
     </div>
   `;
+}
+
+function replyToUser(username, pid) {
+  const input = document.getElementById(`comment-input-${pid}`);
+  if(input) {
+    input.value = `@${username} `;
+    input.focus();
+  }
+}
+
+async function toggleCommentLike(cid, pid) {
+  if(!currentUser) return window.location.href = '/auth';
+  await fetch(`/api/comments/${cid}/like`, {method:'POST'});
+  toggleComments(pid);
 }
 
 async function submitComment(pid) {
@@ -1960,13 +2035,12 @@ function closeGroupModal() { document.getElementById('group-create-modal').style
 async function handleGroupSubmit(e) {
   e.preventDefault();
   const name = document.getElementById('grp-name').value.trim();
-  const cat = document.getElementById('grp-cat').value;
   const desc = document.getElementById('grp-desc').value.trim();
 
   const res = await fetch('/api/groups', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({name, category: cat, description: desc})
+    body: JSON.stringify({name, description: desc})
   });
   const data = await res.json();
   showToast(data.message);
@@ -2110,7 +2184,12 @@ async function openProfile(username) {
         </div>
       </div>
       <p style="font-size:0.82rem;margin:8px 0;">${u.bio || 'Resident of Ijebu'}</p>
-      ${isSelf ? `<button onclick="openEditProfileModal()" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;width:100%;cursor:pointer;">✏️ Edit Profile Photos & Bio</button>` : `<button onclick="toggleFollow('${u.username}')" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;width:100%;cursor:pointer;">${u.is_following ? 'Unfollow' : 'Follow'}</button>`}
+      <div style="display:flex;gap:6px;margin-top:8px;">
+        ${isSelf ? `<button onclick="openEditProfileModal()" style="background:var(--navy-blue);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;flex:1;cursor:pointer;">✏️ Edit Profile</button>` : `
+          <button onclick="toggleFollow('${u.username}')" style="background:var(--navy-blue);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;flex:1;cursor:pointer;">${u.is_following ? 'Unfollow' : 'Follow'}</button>
+          <button onclick="openChatThread('${u.username}')" style="background:var(--emerald-green);color:#fff;border:none;padding:8px 12px;border-radius:8px;font-weight:700;font-size:0.78rem;flex:1;cursor:pointer;">💬 Message</button>
+        `}
+      </div>
     </div>
     ${cpnWalletBlock}
     <h4 style="font-size:0.9rem;margin:12px 0 6px;">Profile Wall Updates</h4>
@@ -2176,7 +2255,7 @@ async function loadGroups() {
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
       <div>
         <h4 style="font-weight:800;font-size:0.9rem;color:var(--navy-blue);">${g.name}</h4>
-        <p style="font-size:0.75rem;color:var(--text-muted);">${g.category} • ${g.member_count} Members</p>
+        <p style="font-size:0.75rem;color:var(--text-muted);">${g.member_count} Members</p>
         <small style="font-size:0.75rem;opacity:0.8;">${g.description || ''}</small>
       </div>
       <button onclick="joinGroup(${g.id})" style="background:var(--navy-blue);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;cursor:pointer;">Join Group</button>
@@ -2332,11 +2411,7 @@ body { background: #f8fafc; color: #0f172a; display: flex; flex-direction: colum
 <div class="info-section">
   <div class="info-card">
     <h4 style="color:var(--navy-blue);font-weight:800;margin-bottom:4px;"><i class="fa-solid fa-earth-africa"></i> About Ijebu Connect</h4>
-    <p>The official digital network connecting residents across Ijebu-Ode, Sagamu, Remo, Ago-Iwoye, Ijebu-Igbo, and the global Ijebu Diaspora.</p>
-  </div>
-  <div class="info-card">
-    <h4 style="color:var(--emerald-green);font-weight:800;margin-bottom:4px;"><i class="fa-solid fa-sack-dollar"></i> CPN Partner Earnings System</h4>
-    <p>Earn <strong>10% Tier-1 and 5% Tier-2 instant commission rewards</strong> on every merchant or trader you invite to the network!</p>
+    <p>The unified digital hub connecting sons and daughters of Ijebu land, both at home and in the diaspora. Trade, network, build communities, and celebrate our heritage together!</p>
   </div>
 </div>
 
@@ -2413,7 +2488,7 @@ body { font-family:'Plus Jakarta Sans', sans-serif; background:#f8fafc; color:#0
 .admin-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
 .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:0.75rem; margin-bottom:1rem; }
 .card { background:#fff; border:1.5px solid #cbd5e1; border-radius:12px; padding:1rem; }
-.val { font-size:1.4rem; font-weight:800; color:#059669; }
+.val { font-size:1.3rem; font-weight:800; color:#059669; }
 .lbl { font-size:0.72rem; color:#64748b; font-weight:700; text-transform:uppercase; }
 .admin-tabs { display:flex; gap:6px; margin-bottom:1rem; border-bottom:2px solid #cbd5e1; padding-bottom:6px; overflow-x:auto; }
 .admin-tab { padding:6px 12px; border-radius:6px; border:none; background:#fff; font-weight:700; font-size:0.8rem; cursor:pointer; color:#64748b; flex-shrink:0; }
@@ -2433,11 +2508,23 @@ th { background:#0b1e36; color:#fff; }
   <a href="/" style="color:#0b1e36;font-weight:700;text-decoration:none;font-size:0.85rem;">← Back to App</a>
 </div>
 
+<!-- SYSTEM OVERVIEW METRICS -->
 <div class="grid">
   <div class="card"><div class="val" id="st-users">0</div><div class="lbl">Total Members</div></div>
   <div class="card"><div class="val" id="st-partners">0</div><div class="lbl">CPN Partners</div></div>
-  <div class="card"><div class="val" id="st-pending">0</div><div class="lbl">Pending Partner Upgrades</div></div>
-  <div class="card"><div class="val" id="st-wallets">₦0.00</div><div class="lbl">Partner Balances</div></div>
+  <div class="card"><div class="val" id="st-pending">0</div><div class="lbl">Pending Upgrades</div></div>
+  <div class="card"><div class="val" id="st-wallets">₦0.00</div><div class="lbl">Member Balances</div></div>
+</div>
+
+<!-- ADMIN FINANCIAL TREASURY METRICS -->
+<div class="card" style="margin-bottom:1rem;background:linear-gradient(135deg, #0b1e36, #1e3a8a);color:#fff;">
+  <h3 style="font-size:0.95rem;margin-bottom:8px;">🏦 Admin System Treasury</h3>
+  <div class="grid" style="grid-template-columns:repeat(auto-fit, minmax(130px, 1fr));margin:0;">
+    <div><small style="opacity:0.8;font-size:0.7rem;">Gross CPN Revenue</small><div style="font-size:1.1rem;font-weight:800;color:#4ade80;" id="st-gross-rev">₦0.00</div></div>
+    <div><small style="opacity:0.8;font-size:0.7rem;">Total Paid Rewards</small><div style="font-size:1.1rem;font-weight:800;color:#f59e0b;" id="st-commissions">₦0.00</div></div>
+    <div><small style="opacity:0.8;font-size:0.7rem;">Fulfilled Cashouts</small><div style="font-size:1.1rem;font-weight:800;color:#38bdf8;" id="st-payouts">₦0.00</div></div>
+    <div><small style="opacity:0.8;font-size:0.7rem;">Net Admin Reserves</small><div style="font-size:1.1rem;font-weight:800;color:#a7f3d0;" id="st-net-admin">₦0.00</div></div>
+  </div>
 </div>
 
 <div class="admin-tabs">
@@ -2489,6 +2576,11 @@ async function loadAdmin() {
   document.getElementById('st-partners').innerText = data.total_partners;
   document.getElementById('st-pending').innerText = data.pending_partners;
   document.getElementById('st-wallets').innerText = '₦' + data.total_partner_wallets.toLocaleString();
+
+  document.getElementById('st-gross-rev').innerText = '₦' + (data.total_income || 0).toLocaleString();
+  document.getElementById('st-commissions').innerText = '₦' + (data.total_commissions || 0).toLocaleString();
+  document.getElementById('st-payouts').innerText = '₦' + (data.total_payouts || 0).toLocaleString();
+  document.getElementById('st-net-admin').innerText = '₦' + (data.admin_net_balance || 0).toLocaleString();
 
   loadPartnerRequests();
   loadMembers();
