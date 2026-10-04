@@ -3,6 +3,7 @@ import re
 import sqlite3
 import random
 import string
+import json
 import requests
 from datetime import datetime
 
@@ -102,8 +103,22 @@ def add_notification(user_id, sender_id, notif_type, target_id, message):
     ''', (user_id, sender_id, notif_type, target_id, message))
     db.commit()
 
+def count_user_listings(user_id):
+    """Counts total active product listings and advert posts created by a user."""
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    
+    cursor.execute(f"SELECT COUNT(*) FROM products WHERE user_id = {p} AND status = 'active'", (user_id,))
+    prod_count = cursor.fetchone()[0]
+    
+    cursor.execute(f"SELECT COUNT(*) FROM posts WHERE user_id = {p} AND content LIKE '%[PRODUCT_ADVERT]%'", (user_id,))
+    ad_post_count = cursor.fetchone()[0]
+    
+    return prod_count + ad_post_count
+
 def init_db():
-    """Initializes tables and indexes non-destructively. Existing data is 100% preserved."""
+    """Initializes tables and indexes non-destructively. Existing data is preserved."""
     with app.app_context():
         db = get_db()
         cursor = db.cursor()
@@ -526,6 +541,7 @@ def login():
                 'age': user['age'],
                 'gender': user['gender'],
                 'bio': user['bio'],
+                'listings_count': count_user_listings(user['id']),
                 'recruits_count': recruits
             }
         })
@@ -547,6 +563,7 @@ def get_current_user():
         if u:
             d = dict(u)
             d['wallet_balance'] = float(d.get('wallet_balance') or 0)
+            d['listings_count'] = count_user_listings(d['id'])
             cursor.execute(f"SELECT COUNT(*) FROM users WHERE referred_by = {p}", (d['referral_code'],))
             d['recruits_count'] = cursor.fetchone()[0]
             cursor.execute(f"SELECT COUNT(*) FROM notifications WHERE user_id = {p} AND is_read = 0", (d['id'],))
@@ -562,7 +579,7 @@ def logout():
     return jsonify({'success': True, 'message': 'Logged out successfully.'})
 
 # ======================================================================
-# FULL PROFILE UPDATE ENDPOINT (UPDATE ALL MEMBER DETAILS)
+# FULL PROFILE UPDATE ENDPOINT
 # ======================================================================
 @app.route('/api/users/profile/update', methods=['POST'])
 def update_user_profile():
@@ -730,7 +747,7 @@ def toggle_follow(username):
     return jsonify({'success': True, 'following': following, 'message': msg})
 
 # ======================================================================
-# GROUPS (COMMUNITY HUBS) API
+# GROUPS API
 # ======================================================================
 @app.route('/api/groups', methods=['GET', 'POST'])
 def handle_groups():
@@ -861,7 +878,7 @@ def request_payout():
     return jsonify({'success': True, 'message': 'Cashout request submitted!'})
 
 # ======================================================================
-# MULTI-PILLAR API (MARKET, BEAUTY, JOBS)
+# MULTI-PILLAR API (2 FREE LISTINGS ENFORCEMENT)
 # ======================================================================
 @app.route('/api/products', methods=['GET', 'POST'])
 def handle_products():
@@ -872,15 +889,21 @@ def handle_products():
     if request.method == 'POST':
         if 'user_id' not in session:
             return jsonify({'success': False, 'message': 'Login required.'}), 401
-        cursor.execute(f"SELECT user_type FROM users WHERE id = {p}", (session['user_id'],))
+        
+        uid = session['user_id']
+        cursor.execute(f"SELECT user_type FROM users WHERE id = {p}", (uid,))
         me = cursor.fetchone()
+        user_type = me['user_type'] if me else 'Resident'
 
-        if not me or me['user_type'] not in ('CPN Partner', 'Admin'):
-            return jsonify({
-                'success': False,
-                'message': 'You must be a CPN Partner to list items/services on Hub directories. Upgrade to CPN Partner first.',
-                'requires_upgrade': True
-            }), 403
+        # ENFORCE FREEMIUM 2-FREE-LISTINGS LIMIT
+        if user_type == 'Resident':
+            used_listings = count_user_listings(uid)
+            if used_listings >= 2:
+                return jsonify({
+                    'success': False,
+                    'message': 'You have used your 2 Free Trial Listings! Upgrade to CPN Partner (₦2,000) for unlimited directory listings and referral earnings.',
+                    'requires_upgrade': True
+                }), 403
 
         data = request.json or {}
         title = data.get('title', '').strip()
@@ -901,7 +924,7 @@ def handle_products():
 
         cursor.execute(f'''INSERT INTO products (user_id, title, category, price, description, whatsapp_number, image_url, video_url, listing_type)
         VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})''',
-                       (session['user_id'], title, category, price, description, whatsapp, image_url, video_url, listing_type))
+                       (uid, title, category, price, description, whatsapp, image_url, video_url, listing_type))
         db.commit()
         return jsonify({'success': True, 'message': f'Listing published on Ijebu {listing_type} Hub!'})
 
@@ -979,7 +1002,7 @@ def send_wink():
         return jsonify({'success': False, 'message': 'Already sent a wink to this member.'})
 
 # ======================================================================
-# SOCIAL FEED & ADVERT RESTRICTION ENGINE
+# SOCIAL FEED & ADVERT ENFORCEMENT
 # ======================================================================
 @app.route('/api/posts', methods=['GET', 'POST'])
 def handle_posts():
@@ -1006,21 +1029,15 @@ def handle_posts():
         if not content and not image_url and not video_url:
             return jsonify({'success': False, 'message': 'Write something or attach image/video.'}), 400
 
-        # STRICT NON-PARTNER ADVERT RESTRICTION RULE
-        if user_type == 'Resident':
-            # Check for sales keywords, phone numbers, or WhatsApp links
-            commercial_keywords = ['whatsapp', 'wa.me', 'call me', 'contact me', 'dm to buy', 'for sale', 'price', 'naira', '₦', 'discount', 'order now', 'pay to', 'bank account', 'cheap price', 'available for sale']
-            phone_pattern = r'(\+?234|0)[789][01]\d{8}'
-            
-            clean_content = content.lower().replace(" ", "").replace("-", "")
-            has_phone = re.search(phone_pattern, clean_content)
-            has_link = 'http://' in content.lower() or 'https://' in content.lower() or 'wa.me' in content.lower()
-            has_keyword = any(kw in content.lower() for kw in commercial_keywords)
-
-            if has_phone or has_link or has_keyword:
+        # ADVERT DETECTION & FREEMIUM RULE FOR FEED POSTS
+        is_advert = '[PRODUCT_ADVERT]' in content or 'wa.me' in content.lower()
+        if is_advert and user_type == 'Resident':
+            used_listings = count_user_listings(uid)
+            if used_listings >= 2:
                 return jsonify({
                     'success': False,
-                    'message': 'Non-partners (Residents) cannot post commercial adverts, phone numbers, or WhatsApp contact links in the social feed. Upgrade to CPN Partner to list items/services freely!'
+                    'message': 'You have used your 2 Free Trial Advert Listings! Upgrade to CPN Partner (₦2,000) for unlimited product advertisements.',
+                    'requires_upgrade': True
                 }), 403
 
         cursor.execute(
@@ -1192,11 +1209,12 @@ def get_user_profile(username):
     res['products'] = products
     res['posts_count'] = len(posts)
     res['products_count'] = len(products)
+    res['listings_count'] = count_user_listings(uid)
 
     return jsonify({'success': True, 'user': res})
 
 # ======================================================================
-# ENHANCED CHAT API WITH DIRECT MESSAGING
+# CHAT API
 # ======================================================================
 def _is_blocked(cursor, p, a, b):
     cursor.execute(f"SELECT 1 FROM blocked_users WHERE blocker_id = {p} AND blocked_id = {p}", (a, b))
@@ -1475,7 +1493,7 @@ def manage_payouts():
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 # ======================================================================
-# FRONTEND TEMPLATES & VIEW ROUTES
+# FRONTEND TEMPLATE & DYNAMIC OPEN GRAPH META PREVIEWS
 # ======================================================================
 INDEX_TEMPLATE = r"""
 <!DOCTYPE html>
@@ -1483,7 +1501,18 @@ INDEX_TEMPLATE = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Ijebu Connect - Mobile Hub</title>
+
+<!-- DYNAMIC OPEN GRAPH META TAGS FOR WHATSAPP/FACEBOOK PREVIEWS -->
+<title>{{ meta_title }}</title>
+<meta name="description" content="{{ meta_desc }}">
+<meta property="og:site_name" content="Ijebu Connect">
+<meta property="og:title" content="{{ meta_title }}">
+<meta property="og:description" content="{{ meta_desc }}">
+<meta property="og:image" content="{{ meta_image }}">
+<meta property="og:url" content="{{ meta_url }}">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 <style>
@@ -1535,12 +1564,13 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 .form-control { padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--border-light); font-size: 0.88rem; outline: none; width: 100%; background: #fff; }
 .btn-submit { background: var(--emerald-green); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.88rem; cursor: pointer; width: 100%; min-height: 44px; }
 
-/* Dynamic Post Feed Speed Optimization */
 .feed-post { background: #fff; border: 1.5px solid var(--border-light); border-radius: 16px; padding: 0.88rem; margin-bottom: 0.85rem; content-visibility: auto; contain-intrinsic-size: 140px; }
 .post-header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
 .avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 0.9rem; flex-shrink: 0; background-size: cover; background-position: center; }
 .post-actions { display: flex; gap: 6px; padding-top: 8px; border-top: 1px solid var(--border-light); }
 .post-action { flex: 1; background: none; border: none; padding: 6px; border-radius: 8px; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; min-height: 38px; }
+
+.post-product-badge { background: #ecfdf5; border: 1.5px solid #10b981; border-radius: 12px; padding: 10px; margin-top: 8px; display: flex; justify-content: space-between; align-items: center; }
 
 .fb-cover-banner { height: 110px; background: linear-gradient(135deg, #0b1e36, #1e3a8a); border-radius: 12px 12px 0 0; position: relative; margin: -1rem -1rem 30px -1rem; }
 .fb-avatar-wrap { position: absolute; bottom: -25px; left: 16px; width: 64px; height: 64px; border-radius: 50%; border: 3px solid #fff; background: var(--emerald-green); overflow: hidden; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.4rem; font-weight: 800; }
@@ -1561,7 +1591,6 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 
 .bank-box { background:#f1f5f9; border:1.5px dashed var(--navy-blue); border-radius:12px; padding:0.88rem; margin:0.75rem 0; font-size:0.85rem; line-height:1.5; }
 
-/* Responsive Mobile Modal Optimization */
 .modal-overlay { display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.65); z-index:9999; align-items:center; justify-content:center; padding:0.75rem; backdrop-filter: blur(2px); }
 .modal-body-scroll { max-height: 85vh; overflow-y: auto; -webkit-overflow-scrolling: touch; border-radius: 16px; }
 
@@ -1621,6 +1650,24 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
       <div id="composer-user-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;"></div>
       <form onsubmit="handlePostSubmit(event, 'Social')">
         <textarea class="form-control" id="post-content" rows="2" placeholder="What's happening in Ijebu today?..."></textarea>
+        
+        <!-- NON-PARTNER ADVERT TOGGLE (SUBJECT TO 2 FREE LIMIT) -->
+        <div style="margin: 8px 0; padding: 8px; background: #f1f5f9; border-radius: 10px;">
+          <div style="display:flex; align-items:center; gap:8px; cursor:pointer;" onclick="toggleProductAttach()">
+            <input type="checkbox" id="attach-product-check">
+            <label for="attach-product-check" style="font-size:0.8rem; font-weight:700; cursor:pointer; color:var(--navy-blue);">
+              🏷️ Attach Product Advert (Free Trial: 2 Allowed)
+            </label>
+          </div>
+          <div id="product-attach-fields" style="display:none; margin-top:8px;">
+            <div style="display:flex; gap:6px; margin-bottom:6px;">
+              <input type="text" id="post-prod-title" class="form-control" placeholder="Product / Service Name">
+              <input type="number" id="post-prod-price" class="form-control" placeholder="Price (₦)">
+            </div>
+            <input type="tel" id="post-prod-whatsapp" class="form-control" placeholder="WhatsApp Phone (e.g. 08012345678)">
+          </div>
+        </div>
+
         <div style="display:flex;gap:8px;align-items:center;margin:8px 0;">
           <input type="file" id="post-file-input" class="form-control" accept="image/*,video/*" style="padding:4px;">
         </div>
@@ -1820,7 +1867,7 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
       <h3 style="font-weight:800;color:var(--navy-blue);">Become CPN Partner (₦2,000)</h3>
       <button onclick="closeCPNModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
     </div>
-    <p style="font-size:0.82rem;color:var(--text-muted);line-height:1.4;">Unlock unlimited listings and earn <strong>10% Tier-1 & 5% Tier-2 referral rewards</strong> on traders you invite!</p>
+    <p style="font-size:0.82rem;color:var(--text-muted);line-height:1.4;">Unlock unlimited directory listings and earn <strong>10% Tier-1 & 5% Tier-2 referral rewards</strong> on traders you invite!</p>
     <div class="bank-box">
       <strong>🏦 Bank Transfer Details:</strong><br>
       Bank Name: <b>OPay</b><br>
@@ -1923,6 +1970,12 @@ function formatNaira(val) {
   return '₦' + parseFloat(val || 0).toLocaleString('en-US', { minimumFractionDigits: 2 });
 }
 
+function toggleProductAttach() {
+  const check = document.getElementById('attach-product-check');
+  const fields = document.getElementById('product-attach-fields');
+  fields.style.display = check.checked ? 'block' : 'none';
+}
+
 function switchNav(target) {
   document.querySelectorAll('.nav-pill').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(p => p.classList.remove('active'));
@@ -2006,7 +2059,6 @@ async function handleLogout() {
   window.location.href = '/auth';
 }
 
-// 1. FIXED SHARE POST FUNCTION (DEEP LINK SAFE)
 function sharePost(postId) {
   const shareUrl = `${window.location.origin}/?post=${postId}`;
   if (navigator.share) {
@@ -2018,7 +2070,6 @@ function sharePost(postId) {
   }
 }
 
-// 2. UNIQUE MEMBER PROFILE SHARE & INVITATION LINK
 function shareProfileLink(username, refCode) {
   const inviteUrl = `${window.location.origin}/auth?ref=${refCode}`;
   if (navigator.share) {
@@ -2038,7 +2089,6 @@ function shareToWhatsApp(refCode) {
   window.open(`https://wa.me/?text=${text}`, '_blank');
 }
 
-// 3. EDIT MEMBER PROFILE MODAL POPULATION
 function openEditProfileModal() {
   if (!currentUser) return window.location.href = '/auth';
   document.getElementById('edit-fullname').value = currentUser.full_name || '';
@@ -2101,9 +2151,22 @@ async function handlePostSubmit(e, postType, groupId = 0) {
   if(!currentUser) return window.location.href = '/auth';
 
   const contentEl = postType === 'Event' ? document.getElementById('event-content') : document.getElementById('post-content');
-  const content = contentEl.value.trim();
+  let content = contentEl.value.trim();
 
-  if(!content) return showToast('Please enter text content', 'error');
+  // NON-PARTNER ADVERT DETECTOR
+  const attachCheck = document.getElementById('attach-product-check');
+  if (attachCheck && attachCheck.checked) {
+    const title = document.getElementById('post-prod-title').value.trim();
+    const price = document.getElementById('post-prod-price').value.trim();
+    const whatsapp = document.getElementById('post-prod-whatsapp').value.trim();
+
+    if (title && whatsapp) {
+      const advertData = JSON.stringify({ title, price: price || 0, whatsapp });
+      content += ` [PRODUCT_ADVERT]${advertData}`;
+    }
+  }
+
+  if(!content) return showToast('Please enter post text', 'error');
 
   let imageUrl = '', videoUrl = '';
   const fileInput = document.getElementById('post-file-input');
@@ -2124,9 +2187,16 @@ async function handlePostSubmit(e, postType, groupId = 0) {
     showToast(data.message);
     contentEl.value = '';
     if(fileInput) fileInput.value = '';
+    if(attachCheck) {
+      attachCheck.checked = false;
+      toggleProductAttach();
+    }
     loadPosts(postType, postType === 'Event' ? 'events-container' : 'feed-posts-container');
   } else {
     showToast(data.message, 'error');
+    if (data.requires_upgrade) {
+      document.getElementById('cpn-upgrade-modal').style.display = 'flex';
+    }
   }
 }
 
@@ -2146,6 +2216,25 @@ function renderPostCard(p) {
   if(p.video_url) mediaHtml = `<video src="${p.video_url}" controls loading="lazy" style="width:100%;border-radius:10px;margin-top:6px;"></video>`;
   else if(p.image_url) mediaHtml = `<img src="${p.image_url}" loading="lazy" style="width:100%;border-radius:10px;margin-top:6px;">`;
 
+  let productAdvertHtml = '';
+  if (p.content.includes('[PRODUCT_ADVERT]')) {
+    try {
+      const parts = p.content.split('[PRODUCT_ADVERT]');
+      p.content = parts[0];
+      const prodInfo = JSON.parse(parts[1]);
+      productAdvertHtml = `
+        <div class="post-product-badge">
+          <div>
+            <div style="font-weight:800; color:var(--navy-blue); font-size:0.88rem;">🏷️ ${prodInfo.title}</div>
+            <div style="font-weight:800; color:var(--emerald-green); font-size:0.82rem;">₦${parseFloat(prodInfo.price).toLocaleString()}</div>
+          </div>
+          <a href="https://wa.me/234${prodInfo.whatsapp.replace(/^0/,'')}" target="_blank" class="btn-whatsapp">
+            <i class="fa-brands fa-whatsapp"></i> Chat Seller
+          </a>
+        </div>`;
+    } catch(e){}
+  }
+
   return `
   <div class="feed-post">
     <div class="post-header">
@@ -2158,6 +2247,7 @@ function renderPostCard(p) {
       </div>
     </div>
     <div style="font-size:0.88rem;line-height:1.4;">${p.content}</div>
+    ${productAdvertHtml}
     ${mediaHtml}
     <div class="post-actions">
       <button class="post-action" onclick="toggleLike(${p.id})">❤️ ${p.likes_count}</button>
@@ -2245,7 +2335,7 @@ async function loadCategoryListings(listingType, containerId) {
 
 function startSellItem(type = 'Market') {
   if(!currentUser) return window.location.href = '/auth';
-  if(currentUser.user_type === 'Resident') {
+  if(currentUser.user_type === 'Resident' && (currentUser.listings_count || 0) >= 2) {
     document.getElementById('cpn-upgrade-modal').style.display = 'flex';
   } else {
     document.getElementById('prod-type').value = type;
@@ -2391,9 +2481,12 @@ async function handleProductSubmit(e) {
   showToast(data.message);
   if(data.success) {
     closeSellModal();
+    checkSession();
     if(type === 'Market') loadCategoryListings('Market', 'products-container');
     if(type === 'Beauty') loadCategoryListings('Beauty', 'beauty-container');
     if(type === 'Jobs') loadCategoryListings('Jobs', 'jobs-container');
+  } else {
+    if(data.requires_upgrade) closeSellModal(), closeCPNModal(), document.getElementById('cpn-upgrade-modal').style.display = 'flex';
   }
 }
 
@@ -2448,7 +2541,6 @@ async function sendWink(receiverId) {
   showToast(data.message);
 }
 
-// MEMBER PROFILE DISPLAY WITH UNIQUE INVITATION SHARE CARD
 async function openProfile(username) {
   const res = await fetch(`/api/users/${encodeURIComponent(username)}`);
   const data = await res.json();
@@ -2899,7 +2991,7 @@ ADMIN_TEMPLATE = r"""
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
 body { font-family:'Plus Jakarta Sans', sans-serif; background:#f8fafc; color:#0f172a; padding:1rem; max-width:900px; margin:0 auto; }
-.admin-header { display:flex; align-items:center; justify-space-between; margin-bottom:1rem; }
+.admin-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
 .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(160px, 1fr)); gap:0.75rem; margin-bottom:1rem; }
 .card { background:#fff; border:1.5px solid #cbd5e1; border-radius:12px; padding:1rem; }
 .val { font-size:1.3rem; font-weight:800; color:#059669; }
@@ -3101,11 +3193,56 @@ loadAdmin();
 """
 
 # ======================================================================
-# ROUTE HANDLERS
+# ROUTE HANDLERS WITH DYNAMIC OPEN GRAPH META INJECTION
 # ======================================================================
 @app.route('/')
 def index():
-    return render_template_string(INDEX_TEMPLATE, contact_email=CONTACT_EMAIL)
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    meta_title = "Ijebu Connect - Mobile Hub"
+    meta_desc = "The unified digital hub connecting sons and daughters of Ijebu land. Connect, trade, and build community."
+    meta_image = f"{request.host_url}static/uploads/default_banner.jpg"
+    meta_url = request.url
+
+    # Dynamic Preview for Shared Post Link (?post=ID)
+    post_id = request.args.get('post')
+    if post_id:
+        try:
+            cursor.execute(f"SELECT p.content, p.image_url, u.full_name FROM posts p JOIN users u ON p.user_id = u.id WHERE p.id = {p}", (post_id,))
+            post_row = cursor.fetchone()
+            if post_row:
+                meta_title = f"{post_row['full_name']} on Ijebu Connect"
+                clean_txt = post_row['content'].split('[PRODUCT_ADVERT]')[0] if '[PRODUCT_ADVERT]' in post_row['content'] else post_row['content']
+                meta_desc = clean_txt[:150] or "Check out this post on Ijebu Connect!"
+                if post_row['image_url']:
+                    meta_image = request.host_url.rstrip('/') + post_row['image_url']
+        except Exception:
+            pass
+
+    # Dynamic Preview for Shared Product Link (?product=ID)
+    product_id = request.args.get('product')
+    if product_id:
+        try:
+            cursor.execute(f"SELECT title, price, description, image_url FROM products WHERE id = {p}", (product_id,))
+            prod_row = cursor.fetchone()
+            if prod_row:
+                meta_title = f"₦{float(prod_row['price']):,.2f} - {prod_row['title']}"
+                meta_desc = prod_row['description'][:150] or "Available now on Ijebu Connect Marketplace!"
+                if prod_row['image_url']:
+                    meta_image = request.host_url.rstrip('/') + prod_row['image_url']
+        except Exception:
+            pass
+
+    return render_template_string(
+        INDEX_TEMPLATE,
+        contact_email=CONTACT_EMAIL,
+        meta_title=meta_title,
+        meta_desc=meta_desc,
+        meta_image=meta_image,
+        meta_url=meta_url
+    )
 
 @app.route('/auth')
 def auth_page():
