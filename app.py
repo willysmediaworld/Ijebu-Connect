@@ -119,7 +119,7 @@ def count_user_listings(user_id):
     ad_post_count = cursor.fetchone()[0]
     return prod_count + ad_post_count
 
-# HARDCODED SEEDING TO PREVENT RENDER DB RESET LOSSES
+# HARDCODED DATA SEEDER TO PREVENT DB LOSS ON RENDER RESTARTS
 def seed_hardcoded_data(cursor, db):
     p = query_param()
     admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect').lower()
@@ -153,31 +153,20 @@ def seed_hardcoded_data(cursor, db):
         except Exception:
             db.rollback()
 
-    # Seed Default Groups if database is fresh
     cursor.execute("SELECT COUNT(*) FROM groups")
     if cursor.fetchone()[0] == 0:
         cursor.execute(f'''
         INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
-        VALUES ({p}, 'Ijebu Traders & Business Network', 'The primary networking hub for all merchants and entrepreneurs across Ijebu.', 'Business', '', '')
+        VALUES ({p}, 'Ijebu Traders Network', 'Official business and networking group for Ijebu traders and service providers.', 'Business', '', '')
         ''', (admin_id,))
         g1_id = cursor.lastrowid or 1
 
-        cursor.execute(f'''
-        INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
-        VALUES ({p}, 'Ojude Oba & Cultural Heritage Club', 'Celebrating the rich cultural festivals and history of Ijebu land.', 'Culture', '', '')
-        ''', (admin_id,))
-        g2_id = cursor.lastrowid or 2
-
-        # Auto add admin as member
         cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (g1_id, admin_id))
-        cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (g2_id, admin_id))
-
-        # Seed Welcome Post inside Group (will also appear on Main Feed)
+        
         cursor.execute(f'''
         INSERT INTO posts (user_id, group_id, content, post_type)
-        VALUES ({p}, {p}, 'Welcome to Ijebu Connect Community Network! Connect with friends, list your business, and join local groups.', 'Social')
+        VALUES ({p}, {p}, 'Welcome to Ijebu Connect! Connect, trade, and build community with us.', 'Social')
         ''', (admin_id, g1_id))
-
         db.commit()
 
 def init_db():
@@ -411,7 +400,6 @@ def init_db():
         except Exception:
             pass
 
-        # RUN HARDCODED DATA SEEDER
         seed_hardcoded_data(cursor, db)
 
 with app.app_context():
@@ -628,7 +616,176 @@ def logout():
     return jsonify({'success': True, 'message': 'Logged out successfully.'})
 
 # ======================================================================
-# GROUPS API
+# FULL PROFILE UPDATE ENDPOINT
+# ======================================================================
+@app.route('/api/users/profile/update', methods=['POST'])
+def update_user_profile():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+
+    data = request.json or {}
+    full_name = data.get('full_name', '').strip()
+    phone = data.get('phone', '').strip()
+    occupation = data.get('occupation', '').strip()
+    gender = data.get('gender', 'Unspecified').strip()
+    bio = data.get('bio', '').strip()
+    avatar_url = data.get('avatar_url', '').strip()
+    cover_url = data.get('cover_url', '').strip()
+
+    try:
+        age = int(data.get('age', 18))
+    except (ValueError, TypeError):
+        age = 18
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+
+    if phone:
+        cursor.execute(f"SELECT id FROM users WHERE phone = {p} AND id != {p}", (phone, uid))
+        if cursor.fetchone():
+            return jsonify({'success': False, 'message': 'Phone number already used by another account.'}), 400
+
+    updates = []
+    params = []
+
+    if full_name:
+        updates.append(f"full_name = {p}")
+        params.append(full_name)
+        session['full_name'] = full_name
+    if phone:
+        updates.append(f"phone = {p}")
+        params.append(phone)
+    if occupation is not None:
+        updates.append(f"occupation = {p}")
+        params.append(occupation)
+    if age:
+        updates.append(f"age = {p}")
+        params.append(age)
+    if gender:
+        updates.append(f"gender = {p}")
+        params.append(gender)
+    if bio is not None:
+        updates.append(f"bio = {p}")
+        params.append(bio)
+    if avatar_url:
+        updates.append(f"avatar_url = {p}")
+        params.append(avatar_url)
+    if cover_url:
+        updates.append(f"cover_url = {p}")
+        params.append(cover_url)
+
+    if updates:
+        params.append(uid)
+        cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = {p}", tuple(params))
+        db.commit()
+
+    return jsonify({'success': True, 'message': 'All profile details updated successfully!'})
+
+# ======================================================================
+# FRIEND SUGGESTIONS & SEARCH API
+# ======================================================================
+@app.route('/api/users/suggestions', methods=['GET'])
+def get_friend_suggestions():
+    if 'user_id' not in session:
+        return jsonify([])
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+    cursor.execute(f'''
+        SELECT id, full_name, username, avatar_url, user_type, occupation
+        FROM users
+        WHERE id != {p}
+        AND id NOT IN (SELECT followed_id FROM followers WHERE follower_id = {p})
+        ORDER BY RANDOM() LIMIT 6
+    ''', (uid, uid))
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+@app.route('/api/search', methods=['GET'])
+def global_search():
+    q = request.args.get('q', '').strip().lower()
+    if not q or len(q) < 2:
+        return jsonify({'users': [], 'products': [], 'posts': [], 'groups': []})
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    term = f"%{q}%"
+
+    cursor.execute(f"SELECT id, full_name, username, user_type, avatar_url FROM users WHERE LOWER(full_name) LIKE {p} OR LOWER(username) LIKE {p} LIMIT 10", (term, term))
+    users = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute(f"SELECT id, title, category, price, listing_type, image_url FROM products WHERE status='active' AND (LOWER(title) LIKE {p} OR LOWER(category) LIKE {p}) LIMIT 10", (term, term))
+    products = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute(f"SELECT p.id, p.content, p.post_type, u.full_name, u.username FROM posts p JOIN users u ON p.user_id = u.id WHERE LOWER(p.content) LIKE {p} LIMIT 10", (term,))
+    posts = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute(f"SELECT id, name, category, description, avatar_url FROM groups WHERE LOWER(name) LIKE {p} OR LOWER(description) LIKE {p} LIMIT 10", (term, term))
+    groups = [dict(r) for r in cursor.fetchall()]
+
+    return jsonify({'users': users, 'products': products, 'posts': posts, 'groups': groups})
+
+# ======================================================================
+# NOTIFICATIONS & FOLLOW API
+# ======================================================================
+@app.route('/api/notifications', methods=['GET', 'POST'])
+def handle_notifications():
+    if 'user_id' not in session:
+        return jsonify([])
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+
+    if request.method == 'POST':
+        cursor.execute(f"UPDATE notifications SET is_read = 1 WHERE user_id = {p}", (uid,))
+        db.commit()
+        return jsonify({'success': True})
+
+    cursor.execute(f'''
+        SELECT n.*, u.username AS sender_username, u.avatar_url AS sender_avatar
+        FROM notifications n
+        LEFT JOIN users u ON n.sender_id = u.id
+        WHERE n.user_id = {p} ORDER BY n.id DESC LIMIT 30
+    ''', (uid,))
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+@app.route('/api/users/<username>/follow', methods=['POST'])
+def toggle_follow(username):
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+
+    cursor.execute(f"SELECT id, full_name FROM users WHERE LOWER(username) = {p}", (username.lower(),))
+    target = cursor.fetchone()
+    if not target or target['id'] == uid:
+        return jsonify({'success': False, 'message': 'Invalid operation.'}), 400
+
+    target_id = target['id']
+    cursor.execute(f"SELECT id FROM followers WHERE follower_id = {p} AND followed_id = {p}", (uid, target_id))
+    existing = cursor.fetchone()
+
+    if existing:
+        cursor.execute(f"DELETE FROM followers WHERE id = {p}", (existing['id'],))
+        following = False
+        msg = f"Unfollowed {target['full_name']}"
+    else:
+        cursor.execute(f"INSERT INTO followers (follower_id, followed_id) VALUES ({p}, {p})", (uid, target_id))
+        following = True
+        msg = f"Now following {target['full_name']}!"
+        add_notification(target_id, uid, 'follow', uid, f"{session['full_name']} started following you!")
+
+    db.commit()
+    return jsonify({'success': True, 'following': following, 'message': msg})
+
+# ======================================================================
+# GROUPS API (WITH PROMINENT EDIT DETAILS)
 # ======================================================================
 @app.route('/api/groups', methods=['GET', 'POST'])
 def handle_groups():
@@ -697,7 +854,7 @@ def update_group(group_id):
     cursor.execute(f"SELECT user_id FROM groups WHERE id = {p}", (group_id,))
     g_row = cursor.fetchone()
     if not g_row or g_row['user_id'] != uid:
-        return jsonify({'success': False, 'message': 'Only group owners can update group details.'}), 403
+        return jsonify({'success': False, 'message': 'Only the group creator can update details.'}), 403
 
     data = request.json or {}
     name = data.get('name', '').strip()
@@ -725,20 +882,7 @@ def update_group(group_id):
         cursor.execute(f"UPDATE groups SET {', '.join(updates)} WHERE id = {p}", tuple(params))
         db.commit()
 
-    return jsonify({'success': True, 'message': 'Group details updated successfully!'})
-
-@app.route('/api/groups/<int:group_id>/members', methods=['GET'])
-def get_group_members(group_id):
-    db = get_db()
-    cursor = db.cursor()
-    p = query_param()
-    cursor.execute(f'''
-        SELECT u.id, u.full_name, u.username, u.avatar_url, u.user_type, gm.created_at AS joined_at
-        FROM group_members gm
-        JOIN users u ON gm.user_id = u.id
-        WHERE gm.group_id = {p} ORDER BY gm.id ASC
-    ''', (group_id,))
-    return jsonify([dict(r) for r in cursor.fetchall()])
+    return jsonify({'success': True, 'message': 'Group updated successfully!'})
 
 @app.route('/api/groups/<int:group_id>/join', methods=['POST'])
 def join_group(group_id):
@@ -760,7 +904,231 @@ def join_group(group_id):
         return jsonify({'success': True, 'joined': True, 'message': 'Joined group!'})
 
 # ======================================================================
-# SOCIAL FEED & GROUP FEED INTEGRATION (POSTS & COMMENTS)
+# EVENTS API
+# ======================================================================
+@app.route('/api/events', methods=['GET', 'POST'])
+def handle_events():
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'POST':
+        if 'user_id' not in session:
+            return jsonify({'success': False, 'message': 'Login required.'}), 401
+        data = request.json or {}
+        title = data.get('title', '').strip()
+        description = data.get('description', '').strip()
+        event_date = data.get('event_date', '').strip()
+        location = data.get('location', '').strip()
+        image_url = data.get('image_url', '').strip()
+        group_id = int(data.get('group_id') or 0)
+
+        if not title:
+            return jsonify({'success': False, 'message': 'Event title is required.'}), 400
+
+        cursor.execute(f'''
+            INSERT INTO events (group_id, user_id, title, description, event_date, location, image_url)
+            VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p})
+        ''', (group_id, session['user_id'], title, description, event_date, location, image_url))
+        db.commit()
+
+        return jsonify({'success': True, 'message': 'Event created successfully!'})
+
+    group_id = int(request.args.get('group_id') or 0)
+    if group_id > 0:
+        cursor.execute(f'''
+            SELECT e.*, u.full_name AS creator_name, u.username AS creator_username
+            FROM events e JOIN users u ON e.user_id = u.id
+            WHERE e.group_id = {p} ORDER BY e.id DESC
+        ''', (group_id,))
+    else:
+        cursor.execute(f'''
+            SELECT e.*, u.full_name AS creator_name, u.username AS creator_username, g.name AS group_name
+            FROM events e JOIN users u ON e.user_id = u.id
+            LEFT JOIN groups g ON e.group_id = g.id ORDER BY e.id DESC LIMIT 50
+        ''')
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+# ======================================================================
+# CPN & PAYMENTS
+# ======================================================================
+@app.route('/api/cpn/claim-bank-transfer', methods=['POST'])
+def claim_bank_transfer():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    data = request.json or {}
+    note = data.get('reference_note', '').strip()
+    if not note:
+        return jsonify({'success': False, 'message': 'Please enter transfer reference note.'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    cursor.execute(f"INSERT INTO partner_requests (user_id, amount, reference_note) VALUES ({p}, 2000.0, {p})",
+                   (session['user_id'], note))
+    db.commit()
+    return jsonify({'success': True, 'message': 'Payment claim submitted! Admin will verify and activate your CPN Partner status.'})
+
+@app.route('/api/cpn/withdraw', methods=['POST'])
+def request_payout():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    data = request.json or {}
+    try:
+        amount = float(data.get('amount', 0))
+    except (ValueError, TypeError):
+        amount = 0.0
+
+    bank_name = data.get('bank_name', '').strip()
+    account_number = data.get('account_number', '').strip()
+    account_name = data.get('account_name', '').strip()
+
+    if amount < 1000 or not bank_name or not account_number or not account_name:
+        return jsonify({'success': False, 'message': 'Minimum payout is ₦1,000. All bank details required.'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+
+    cursor.execute(f"UPDATE users SET wallet_balance = wallet_balance - {p} WHERE id = {p} AND wallet_balance >= {p}",
+                   (amount, uid, amount))
+    if cursor.rowcount == 0:
+        return jsonify({'success': False, 'message': 'Insufficient wallet balance.'}), 400
+
+    cursor.execute(f'''INSERT INTO payout_requests (user_id, amount, bank_name, account_number, account_name)
+    VALUES ({p}, {p}, {p}, {p}, {p})''', (uid, amount, bank_name, account_number, account_name))
+    cursor.execute(f'''INSERT INTO transactions (user_id, amount, tx_type, description)
+    VALUES ({p}, {p}, 'Bank Cashout Request', {p})''', (uid, amount, f"Cashout to {bank_name} ({account_number})"))
+    db.commit()
+    return jsonify({'success': True, 'message': 'Cashout request submitted!'})
+
+# ======================================================================
+# MULTI-PILLAR PRODUCTS API (2 FREE LISTINGS ENFORCEMENT)
+# ======================================================================
+@app.route('/api/products', methods=['GET', 'POST'])
+def handle_products():
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'POST':
+        if 'user_id' not in session:
+            return jsonify({'success': False, 'message': 'Login required.'}), 401
+
+        uid = session['user_id']
+        cursor.execute(f"SELECT user_type FROM users WHERE id = {p}", (uid,))
+        me = cursor.fetchone()
+        user_type = me['user_type'] if me else 'Resident'
+
+        if user_type == 'Resident':
+            used_listings = count_user_listings(uid)
+            if used_listings >= 2:
+                return jsonify({
+                    'success': False,
+                    'message': 'You have used your 2 Free Trial Listings! Upgrade to CPN Partner (₦2,000) for unlimited directory listings and referral earnings.',
+                    'requires_upgrade': True
+                }), 403
+
+        data = request.json or {}
+        title = data.get('title', '').strip()
+        category = data.get('category', 'General')
+        listing_type = data.get('listing_type', 'Market')
+        try:
+            price = float(data.get('price', 0))
+        except (ValueError, TypeError):
+            price = 0.0
+
+        description = data.get('description', '').strip()
+        whatsapp = data.get('whatsapp_number', '').strip()
+        image_url = data.get('image_url', '').strip()
+        video_url = data.get('video_url', '').strip()
+
+        if not title or not whatsapp:
+            return jsonify({'success': False, 'message': 'Title and WhatsApp contact required.'}), 400
+
+        cursor.execute(f'''INSERT INTO products (user_id, title, category, price, description, whatsapp_number, image_url, video_url, listing_type)
+        VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})''',
+                       (uid, title, category, price, description, whatsapp, image_url, video_url, listing_type))
+        db.commit()
+        return jsonify({'success': True, 'message': f'Listing published on Ijebu {listing_type} Hub!'})
+
+    q = request.args.get('q', '').strip().lower()
+    listing_type = request.args.get('type', 'Market').strip()
+    sql = f'''
+        SELECT p.*, u.full_name AS seller_name, u.username AS seller_username,
+        u.is_verified_merchant, u.user_type
+        FROM products p JOIN users u ON p.user_id = u.id
+        WHERE p.status = 'active' AND p.listing_type = {p}
+    '''
+    params = [listing_type]
+    if q:
+        sql += f" AND (LOWER(p.title) LIKE {p} OR LOWER(p.description) LIKE {p} OR LOWER(p.category) LIKE {p})"
+        params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
+    sql += ' ORDER BY p.id DESC'
+    cursor.execute(sql, tuple(params))
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+# ======================================================================
+# DATING API
+# ======================================================================
+@app.route('/api/dating/profile', methods=['POST'])
+def update_dating_profile():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    data = request.json or {}
+    age = int(data.get('age', 18))
+    gender = data.get('gender', 'Female')
+    intent = data.get('relationship_intent', 'Dating')
+    bio = data.get('bio', '').strip()
+    occupation = data.get('occupation', '').strip()
+    is_active = 1 if data.get('is_dating_active') else 0
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    cursor.execute(f'''UPDATE users SET age={p}, gender={p}, relationship_intent={p}, bio={p}, occupation={p}, is_dating_active={p}
+    WHERE id={p}''', (age, gender, intent, bio, occupation, is_active, session['user_id']))
+    db.commit()
+    return jsonify({'success': True, 'message': 'Dating profile updated!'})
+
+@app.route('/api/dating/matches', methods=['GET'])
+def get_dating_matches():
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    current_uid = session.get('user_id') or 0
+    sql = f'''
+        SELECT id, full_name, username, user_type, age, gender, relationship_intent, bio, occupation, avatar_url, created_at
+        FROM users WHERE is_dating_active = 1 AND id != {p} ORDER BY id DESC LIMIT 50
+    '''
+    cursor.execute(sql, (current_uid,))
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+@app.route('/api/dating/wink', methods=['POST'])
+def send_wink():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    data = request.json or {}
+    receiver_id = data.get('receiver_id')
+    if not receiver_id:
+        return jsonify({'success': False, 'message': 'Invalid target.'}), 400
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+
+    try:
+        cursor.execute(f"INSERT INTO dating_winks (sender_id, receiver_id) VALUES ({p}, {p})", (uid, receiver_id))
+        db.commit()
+        add_notification(receiver_id, uid, 'wink', uid, f"{session['full_name']} sent you a Wink 👋 on Dating Match!")
+        return jsonify({'success': True, 'message': 'Wink sent successfully!'})
+    except Exception:
+        return jsonify({'success': False, 'message': 'Already sent a wink to this member.'})
+
+# ======================================================================
+# SOCIAL FEED & GROUP FEED INTEGRATION (CROSS-POSTING & COMMENTS)
 # ======================================================================
 @app.route('/api/posts', methods=['GET', 'POST'])
 def handle_posts():
@@ -787,6 +1155,16 @@ def handle_posts():
         if not content and not image_url and not video_url:
             return jsonify({'success': False, 'message': 'Write something or attach image/video.'}), 400
 
+        is_advert = '[PRODUCT_ADVERT]' in content or 'wa.me' in content.lower()
+        if is_advert and user_type == 'Resident':
+            used_listings = count_user_listings(uid)
+            if used_listings >= 2:
+                return jsonify({
+                    'success': False,
+                    'message': 'You have used your 2 Free Trial Advert Listings! Upgrade to CPN Partner (₦2,000) for unlimited advertisements.',
+                    'requires_upgrade': True
+                }), 403
+
         cursor.execute(
             f"INSERT INTO posts (user_id, group_id, content, image_url, video_url, post_type) VALUES ({p}, {p}, {p}, {p}, {p}, {p})",
             (uid, group_id, content, image_url, video_url, post_type)
@@ -798,7 +1176,7 @@ def handle_posts():
     post_type_filter = request.args.get('type', 'Social')
     group_filter = int(request.args.get('group_id') or 0)
 
-    # GROUP POSTS ALSO APPEAR ON MAIN FEED (group_filter == 0)
+    # GROUP POSTS CROSS-POST TO MAIN FEED (when group_filter == 0)
     if group_filter > 0:
         cursor.execute(f'''
             SELECT p.id, p.user_id, p.group_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
@@ -923,6 +1301,192 @@ def toggle_comment_like(comment_id):
     return jsonify({'success': True, 'liked': liked, 'likes_count': cursor.fetchone()[0]})
 
 # ======================================================================
+# PUBLIC MEMBER PROFILE & WALL
+# ======================================================================
+@app.route('/api/users/<username>', methods=['GET'])
+def get_user_profile(username):
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    cursor.execute(f'''
+        SELECT id, full_name, phone, username, user_type, referral_code, wallet_balance, is_verified_merchant,
+        age, gender, relationship_intent, bio, occupation, avatar_url, cover_url, created_at
+        FROM users WHERE LOWER(username) = {p}
+    ''', (username.lower(),))
+    user = cursor.fetchone()
+
+    if not user:
+        return jsonify({'success': False, 'message': 'User not found.'}), 404
+
+    uid = user['id']
+    current_uid = session.get('user_id') or 0
+
+    cursor.execute(f"SELECT COUNT(*) FROM users WHERE referred_by = {p}", (user['referral_code'],))
+    recruits_count = cursor.fetchone()[0]
+
+    cursor.execute(f"SELECT COUNT(*) FROM followers WHERE followed_id = {p}", (uid,))
+    followers_count = cursor.fetchone()[0]
+
+    cursor.execute(f"SELECT COUNT(*) FROM followers WHERE follower_id = {p}", (uid,))
+    following_count = cursor.fetchone()[0]
+
+    is_following = False
+    if current_uid:
+        cursor.execute(f"SELECT 1 FROM followers WHERE follower_id = {p} AND followed_id = {p}", (current_uid, uid))
+        is_following = cursor.fetchone() is not None
+
+    cursor.execute(f'''
+        SELECT p.id, p.user_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
+        u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
+        g.name AS group_name,
+        (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
+        (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments_count,
+        CASE WHEN EXISTS (SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}) THEN 1 ELSE 0 END AS liked_by_me
+        FROM posts p JOIN users u ON p.user_id = u.id
+        LEFT JOIN groups g ON p.group_id = g.id
+        WHERE p.user_id = {p} ORDER BY p.id DESC
+    ''', (current_uid, uid))
+    posts = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute(f"SELECT * FROM products WHERE user_id = {p} AND status = 'active' ORDER BY id DESC", (uid,))
+    products = [dict(r) for r in cursor.fetchall()]
+
+    res = dict(user)
+    res['wallet_balance'] = float(res.get('wallet_balance') or 0)
+    res['recruits_count'] = recruits_count
+    res['followers_count'] = followers_count
+    res['following_count'] = following_count
+    res['is_following'] = is_following
+    res['posts'] = posts
+    res['products'] = products
+    res['posts_count'] = len(posts)
+    res['products_count'] = len(products)
+    res['listings_count'] = count_user_listings(uid)
+
+    return jsonify({'success': True, 'user': res})
+
+# ======================================================================
+# CHAT API
+# ======================================================================
+def _is_blocked(cursor, p, a, b):
+    cursor.execute(f"SELECT 1 FROM blocked_users WHERE blocker_id = {p} AND blocked_id = {p}", (a, b))
+    return cursor.fetchone() is not None
+
+@app.route('/api/chat/unread', methods=['GET'])
+def chat_unread():
+    if 'user_id' not in session:
+        return jsonify({'success': True, 'count': 0})
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    cursor.execute(f"SELECT COUNT(*) FROM messages WHERE receiver_id = {p} AND is_read = 0", (session['user_id'],))
+    return jsonify({'success': True, 'count': cursor.fetchone()[0]})
+
+@app.route('/api/chat/partners', methods=['GET'])
+def chat_partners():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+
+    cursor.execute(f'''
+        SELECT CASE WHEN sender_id = {p} THEN receiver_id ELSE sender_id END AS other_id, MAX(id) AS last_id
+        FROM messages WHERE sender_id = {p} OR receiver_id = {p}
+        GROUP BY CASE WHEN sender_id = {p} THEN receiver_id ELSE sender_id END
+        ORDER BY last_id DESC
+    ''', (uid, uid, uid, uid))
+
+    partners = []
+    chatted_ids = set()
+
+    for row in cursor.fetchall():
+        other_id = row['other_id']
+        chatted_ids.add(other_id)
+        last_id = row['last_id']
+
+        cursor.execute(f"SELECT id, full_name, username, user_type, avatar_url FROM users WHERE id = {p}", (other_id,))
+        u = cursor.fetchone()
+        if not u:
+            continue
+
+        cursor.execute(f"SELECT content, sender_id, created_at FROM messages WHERE id = {p}", (last_id,))
+        m = cursor.fetchone()
+
+        cursor.execute(f"SELECT COUNT(*) FROM messages WHERE sender_id = {p} AND receiver_id = {p} AND is_read = 0", (other_id, uid))
+        unread = cursor.fetchone()[0]
+
+        partners.append({
+            'user': dict(u),
+            'last_message': (m['content'] if m else '')[:60],
+            'last_from_me': (m['sender_id'] == uid) if m else False,
+            'last_time': str(m['created_at']) if m else '',
+            'unread': unread
+        })
+
+    friends = []
+    try:
+        cursor.execute(f'''
+            SELECT DISTINCT u.id, u.full_name, u.username, u.avatar_url, u.user_type
+            FROM users u
+            JOIN followers f ON (f.follower_id = {p} AND f.followed_id = u.id) OR (f.followed_id = {p} AND f.follower_id = u.id)
+            WHERE u.id != {p} LIMIT 15
+        ''', (uid, uid, uid))
+        all_friends = cursor.fetchall()
+        for f in all_friends:
+            if f['id'] not in chatted_ids:
+                friends.append(dict(f))
+    except Exception:
+        friends = []
+
+    return jsonify({'success': True, 'partners': partners, 'friends': friends})
+
+@app.route('/api/chat/<username>', methods=['GET', 'POST'])
+def chat_thread(username):
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+
+    cursor.execute(f"SELECT id, full_name, username, user_type, avatar_url FROM users WHERE LOWER(username) = {p}", (username.lower(),))
+    other = cursor.fetchone()
+    if not other:
+        return jsonify({'success': False, 'message': 'User not found.'}), 404
+
+    other_id = other['id']
+
+    if request.method == 'POST':
+        data = request.json or {}
+        content = (data.get('content') or '').strip()
+        if not content:
+            return jsonify({'success': False, 'message': 'Message cannot be empty.'}), 400
+
+        if _is_blocked(cursor, p, uid, other_id) or _is_blocked(cursor, p, other_id, uid):
+            return jsonify({'success': False, 'message': 'Cannot send message.'}), 403
+
+        cursor.execute(f"INSERT INTO messages (sender_id, receiver_id, content) VALUES ({p}, {p}, {p})", (uid, other_id, content))
+        db.commit()
+        return jsonify({'success': True, 'message': 'Sent.'})
+
+    cursor.execute(f"UPDATE messages SET is_read = 1 WHERE sender_id = {p} AND receiver_id = {p}", (other_id, uid))
+    db.commit()
+
+    cursor.execute(f'''
+        SELECT m.id, m.sender_id, m.receiver_id, m.content, m.is_read, m.created_at,
+        u.full_name, u.username
+        FROM messages m JOIN users u ON m.sender_id = u.id
+        WHERE (m.sender_id = {p} AND m.receiver_id = {p}) OR (m.sender_id = {p} AND m.receiver_id = {p})
+        ORDER BY m.id ASC LIMIT 300
+    ''', (uid, other_id, other_id, uid))
+    messages = [dict(r) for r in cursor.fetchall()]
+
+    return jsonify({'success': True, 'other': dict(other), 'messages': messages, 'me_id': uid})
+
+# ======================================================================
 # ADMIN API (WITH POST DELETION & MODERATION)
 # ======================================================================
 @app.route('/api/admin/overview', methods=['GET'])
@@ -938,6 +1502,9 @@ def get_admin_overview():
 
     cursor.execute("SELECT COUNT(*) FROM users WHERE user_type = 'CPN Partner'")
     total_partners = cursor.fetchone()[0]
+
+    cursor.execute("SELECT COUNT(*) FROM products")
+    total_products = cursor.fetchone()[0]
 
     cursor.execute("SELECT COUNT(*) FROM posts")
     total_posts = cursor.fetchone()[0]
@@ -955,6 +1522,7 @@ def get_admin_overview():
         'success': True,
         'total_users': total_users,
         'total_partners': total_partners,
+        'total_products': total_products,
         'total_posts': total_posts,
         'total_groups': total_groups,
         'total_partner_wallets': total_wallets,
@@ -978,7 +1546,7 @@ def admin_manage_posts():
         cursor.execute(f"DELETE FROM post_likes WHERE post_id = {p}", (post_id,))
         cursor.execute(f"DELETE FROM posts WHERE id = {p}", (post_id,))
         db.commit()
-        return jsonify({'success': True, 'message': 'Post removed successfully.'})
+        return jsonify({'success': True, 'message': 'Post deleted successfully.'})
 
     cursor.execute('''
         SELECT p.id, p.content, p.post_type, p.image_url, p.created_at,
@@ -1006,11 +1574,77 @@ def admin_manage_users():
         cursor.execute(f"DELETE FROM comments WHERE user_id = {p}", (user_id,))
         cursor.execute(f"DELETE FROM post_likes WHERE user_id = {p}", (user_id,))
         cursor.execute(f"DELETE FROM posts WHERE user_id = {p}", (user_id,))
+        cursor.execute(f"DELETE FROM products WHERE user_id = {p}", (user_id,))
+        cursor.execute(f"DELETE FROM messages WHERE sender_id = {p} OR receiver_id = {p}", (user_id, user_id))
+        cursor.execute(f"DELETE FROM followers WHERE follower_id = {p} OR followed_id = {p}", (user_id, user_id))
         cursor.execute(f"DELETE FROM users WHERE id = {p}", (user_id,))
         db.commit()
         return jsonify({'success': True, 'message': 'Member removed.'})
 
     cursor.execute("SELECT id, full_name, username, phone, user_type FROM users ORDER BY id DESC")
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+@app.route('/api/admin/partner-requests', methods=['GET', 'POST'])
+def admin_partner_requests():
+    admin, err = require_admin()
+    if err:
+        return err
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'POST':
+        data = request.json or {}
+        req_id = data.get('request_id')
+        action = data.get('action')
+
+        cursor.execute(f"SELECT user_id FROM partner_requests WHERE id = {p}", (req_id,))
+        req = cursor.fetchone()
+        if not req:
+            return jsonify({'success': False, 'message': 'Request not found.'}), 404
+
+        uid = req['user_id']
+        if action == 'approve':
+            cursor.execute(f"UPDATE users SET user_type = 'CPN Partner', is_verified_merchant = 1 WHERE id = {p}", (uid,))
+            cursor.execute(f"UPDATE partner_requests SET status = 'approved' WHERE id = {p}", (req_id,))
+            db.commit()
+            process_cpn_commission(uid, upgrade_fee=2000.0)
+            add_notification(uid, 0, 'system', 0, "Congratulations! Your CPN Partner upgrade has been approved!")
+            return jsonify({'success': True, 'message': 'Member approved as CPN Partner!'})
+        else:
+            cursor.execute(f"UPDATE partner_requests SET status = 'rejected' WHERE id = {p}", (req_id,))
+            db.commit()
+            return jsonify({'success': True, 'message': 'Partner claim rejected.'})
+
+    cursor.execute('''SELECT pr.*, u.full_name, u.phone, u.username FROM partner_requests pr JOIN users u ON pr.user_id = u.id ORDER BY pr.id DESC''')
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+@app.route('/api/admin/payouts', methods=['GET', 'POST'])
+def manage_payouts():
+    admin, err = require_admin()
+    if err:
+        return err
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'POST':
+        data = request.json or {}
+        payout_id = data.get('payout_id')
+        new_status = data.get('status', 'approved')
+
+        if new_status == 'rejected':
+            cursor.execute(f"SELECT user_id, amount FROM payout_requests WHERE id = {p}", (payout_id,))
+            req = cursor.fetchone()
+            if req:
+                cursor.execute(f"UPDATE users SET wallet_balance = wallet_balance + {p} WHERE id = {p}",
+                               (float(req['amount'] or 0), req['user_id']))
+
+        cursor.execute(f"UPDATE payout_requests SET status = {p} WHERE id = {p}", (new_status, payout_id))
+        db.commit()
+        return jsonify({'success': True, 'message': f'Payout marked as {new_status}.'})
+
+    cursor.execute('''SELECT pr.*, u.full_name, u.phone, u.username FROM payout_requests pr JOIN users u ON pr.user_id = u.id ORDER BY pr.id DESC''')
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 # ======================================================================
@@ -1026,6 +1660,14 @@ INDEX_TEMPLATE = r"""
 <title>{{ meta_title }}</title>
 <meta name="description" content="{{ meta_desc }}">
 
+<!-- Open Graph Preview -->
+<meta property="og:site_name" content="Ijebu Connect">
+<meta property="og:title" content="{{ meta_title }}">
+<meta property="og:description" content="{{ meta_desc }}">
+<meta property="og:image" content="{{ meta_image }}">
+<meta property="og:url" content="{{ meta_url }}">
+<meta property="og:type" content="website">
+
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
 
@@ -1040,17 +1682,18 @@ INDEX_TEMPLATE = r"""
   --text-muted: #65676b;
 }
 
-* { box-sizing: border-box; margin:0; padding:0; font-family:'Plus Jakarta Sans', sans-serif; }
+* { box-sizing: border-box; margin:0; padding:0; font-family:'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color:transparent; }
 body { background: var(--bg-body); color: var(--text-dark); display: flex; flex-direction: column; min-height: 100vh; padding-bottom: 70px; }
 
 #toast-container { position: fixed; top: 12px; right: 12px; left: 12px; z-index: 9999; }
 .toast { background: var(--navy-blue); color: #fff; padding: 12px; border-radius: 12px; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; text-align: center; }
 
 header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-light); position: sticky; top:0; z-index: 100; }
-.brand-title { font-size: 1.15rem; font-weight: 800; color: var(--navy-blue); }
+.brand-title { font-size: 1.15rem; font-weight: 800; color: var(--navy-blue); cursor: pointer; }
 .brand-title span { color: var(--fb-blue); }
 
-.top-nav-pills { display: flex; gap: 6px; padding: 0.6rem 0.5rem; background: #fff; border-bottom: 1px solid var(--border-light); overflow-x: auto; }
+.top-nav-pills { display: flex; gap: 6px; padding: 0.6rem 0.5rem; background: #fff; border-bottom: 1px solid var(--border-light); overflow-x: auto; scrollbar-width: none; }
+.top-nav-pills::-webkit-scrollbar { display: none; }
 .nav-pill { padding: 6px 14px; border-radius: 20px; font-size: 0.78rem; font-weight: 700; background: #f0f2f5; color: var(--text-muted); cursor: pointer; flex-shrink: 0; }
 .nav-pill.active { background: var(--fb-blue); color: #fff; }
 
@@ -1069,7 +1712,7 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
   padding: 10px 18px;
   border-radius: 10px;
   font-weight: 800;
-  font-size: 0.9rem;
+  font-size: 0.92rem;
   color: var(--navy-blue);
   cursor: pointer;
   min-height: 44px;
@@ -1077,7 +1720,7 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
   align-items: center;
   gap: 6px;
   margin-right: 8px;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+  box-shadow: 0 2px 5px rgba(0,0,0,0.08);
 }
 
 .feed-post { background: #fff; border: 1px solid var(--border-light); border-radius: 12px; padding: 0.88rem; margin-bottom: 0.85rem; }
@@ -1095,7 +1738,7 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 .comment-reply-item { margin-left: 18px; padding-left: 8px; border-left: 2px solid var(--fb-blue); }
 
 .btn-submit { background: var(--fb-blue); color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 700; font-size: 0.88rem; cursor: pointer; width: 100%; min-height: 42px; }
-.form-control { padding: 10px 12px; border-radius: 8px; border: 1.5px solid var(--border-light); font-size: 0.88rem; outline: none; width: 100%; }
+.form-control { padding: 10px 12px; border-radius: 8px; border: 1.5px solid var(--border-light); font-size: 0.88rem; outline: none; width: 100%; background: #fff; }
 
 .mobile-bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--border-light); display: flex; justify-content: space-around; padding: 6px 0; z-index: 1000; height: 60px; }
 .nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); font-size: 0.7rem; font-weight: 700; flex: 1; cursor: pointer; text-decoration: none; }
@@ -1120,6 +1763,11 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 <div class="top-nav-pills">
   <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-house"></i> Main Feed</div>
   <div class="nav-pill" data-nav="groups" onclick="switchNav('groups')"><i class="fa-solid fa-users"></i> Groups</div>
+  <div class="nav-pill" data-nav="events" onclick="switchNav('events')"><i class="fa-solid fa-calendar-days"></i> Events</div>
+  <div class="nav-pill" data-nav="market" onclick="switchNav('market')"><i class="fa-solid fa-store"></i> Market</div>
+  <div class="nav-pill" data-nav="beauty" onclick="switchNav('beauty')"><i class="fa-solid fa-scissors"></i> Beauty</div>
+  <div class="nav-pill" data-nav="jobs" onclick="switchNav('jobs')"><i class="fa-solid fa-briefcase"></i> Jobs</div>
+  <div class="nav-pill" data-nav="dating" onclick="switchNav('dating')"><i class="fa-solid fa-heart" style="color:#ef4444;"></i> Dating</div>
   <div class="nav-pill" id="admin-pill" style="display:none;" onclick="window.location.href='/admin'"><i class="fa-solid fa-gear"></i> Admin Panel</div>
 </div>
 
@@ -1133,7 +1781,7 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
         <div style="display:flex;gap:8px;align-items:center;margin:8px 0;">
           <input type="file" id="post-file-input" class="form-control" accept="image/*,video/*" style="padding:4px;">
         </div>
-        <button type="submit" class="btn-submit">Publish Post</button>
+        <button type="submit" class="btn-submit">Publish Update</button>
       </form>
     </div>
     <div id="feed-posts-container"></div>
@@ -1142,31 +1790,104 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
   <!-- GROUPS HUB -->
   <div id="view-groups" class="view-section">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <h3 style="font-size:1.1rem;font-weight:800;color:var(--navy-blue);">Facebook Groups</h3>
+      <h3 style="font-size:1.1rem;font-weight:800;color:var(--navy-blue);">Community Groups</h3>
       <button onclick="openGroupCreateModal()" class="btn-submit" style="width:auto;padding:8px 16px;">+ Create Group</button>
     </div>
     <div id="groups-container"></div>
   </div>
 
-  <!-- GROUP DETAIL VIEW -->
+  <!-- GROUP DETAIL PAGE -->
   <div id="view-group-detail" class="view-section">
     <button onclick="switchNav('groups')" style="background:#fff;border:1px solid var(--border-light);padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;margin-bottom:8px;">← Back to Groups</button>
 
     <div id="group-detail-header" class="card"></div>
 
     <div class="card" id="group-post-composer" style="display:none;">
-      <h4 style="font-size:0.88rem; font-weight:800; margin-bottom:6px;">Post to Group (Will also show on Main Feed)</h4>
+      <h4 style="font-size:0.88rem; font-weight:800; margin-bottom:6px;">Post to Group (Appears on Main Feed too)</h4>
       <form onsubmit="handleGroupPostSubmit(event)">
         <input type="hidden" id="active-group-id" value="0">
         <textarea class="form-control" id="group-post-content" rows="2" placeholder="Write something in this group..."></textarea>
         <div style="display:flex;gap:8px;align-items:center;margin:8px 0;">
           <input type="file" id="group-post-file-input" class="form-control" accept="image/*,video/*" style="padding:4px;">
         </div>
-        <button type="submit" class="btn-submit">Post to Group</button>
+        <button type="submit" class="btn-submit">Publish Post</button>
       </form>
     </div>
 
     <div id="group-posts-container"></div>
+  </div>
+
+  <!-- EVENTS VIEW -->
+  <div id="view-events" class="view-section">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h3 style="font-size:1rem;font-weight:800;">📅 Events & Festivals</h3>
+        <button onclick="openCreateEventModal()" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.78rem;">+ Create Event</button>
+      </div>
+    </div>
+    <div id="events-feed-container"></div>
+  </div>
+
+  <!-- MARKETPLACE -->
+  <div id="view-market" class="view-section">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <h3 style="font-size:1rem;font-weight:800;">Marketplace</h3>
+      <button onclick="startSellItem('Market')" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.78rem;">+ List Item</button>
+    </div>
+    <div id="products-container" class="card"></div>
+  </div>
+
+  <!-- BEAUTY & FASHION -->
+  <div id="view-beauty" class="view-section">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <h3 style="font-size:1rem;font-weight:800;">Beauty & Fashion</h3>
+      <button onclick="startSellItem('Beauty')" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.78rem;">+ Add Service</button>
+    </div>
+    <div id="beauty-container" class="card"></div>
+  </div>
+
+  <!-- JOBS -->
+  <div id="view-jobs" class="view-section">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <h3 style="font-size:1rem;font-weight:800;">Jobs & Artisans</h3>
+      <button onclick="startSellItem('Jobs')" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.78rem;">+ Post Skill</button>
+    </div>
+    <div id="jobs-container" class="card"></div>
+  </div>
+
+  <!-- DATING -->
+  <div id="view-dating" class="view-section">
+    <div class="card" style="background:linear-gradient(135deg, #4f46e5, #7c3aed);color:#fff;">
+      <h3 style="font-weight:800;margin-bottom:4px;">❤️ Ijebu Singles Match</h3>
+      <p style="font-size:0.78rem;opacity:0.9;margin-bottom:8px;">Connect with verified singles.</p>
+      <button onclick="openDatingSettingsModal()" style="background:#fff;color:#4f46e5;border:none;padding:6px 12px;border-radius:8px;font-weight:800;font-size:0.75rem;">Set Up Profile</button>
+    </div>
+    <div id="dating-matches-container"></div>
+  </div>
+
+  <!-- CHAT -->
+  <div id="view-chat" class="view-section">
+    <div id="chat-list-wrap">
+      <h3 style="font-size:1rem;font-weight:800;margin-bottom:8px;">Messages</h3>
+      <div id="chat-partners-container"></div>
+    </div>
+    <div id="chat-thread-wrap" style="display:none;">
+      <button onclick="closeChatThread()" style="background:#fff;border:1px solid var(--border-light);padding:4px 10px;border-radius:8px;font-size:0.75rem;font-weight:700;margin-bottom:8px;">← Back to Chat</button>
+      <div id="chat-thread-header" class="card" style="padding:0.5rem 0.88rem;"></div>
+      <div id="chat-messages" style="min-height:220px;max-height:50vh;overflow-y:auto;padding:6px 0;"></div>
+      <form onsubmit="sendChatMessage(event)" style="position:sticky;bottom:0;background:var(--bg-body);padding:6px 0;">
+        <div style="display:flex;gap:6px;">
+          <input type="text" id="chat-input" class="form-control" placeholder="Type a message..." style="flex:1;">
+          <button type="submit" class="btn-submit" style="width:auto;padding:10px 16px;">Send</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- PROFILE VIEW -->
+  <div id="view-profile" class="view-section">
+    <button onclick="switchNav('feed')" style="background:#fff;border:1px solid var(--border-light);padding:4px 10px;border-radius:8px;font-weight:700;font-size:0.75rem;margin-bottom:8px;">← Back</button>
+    <div id="profile-wall-container"></div>
   </div>
 
 </div>
@@ -1197,6 +1918,8 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 <div class="mobile-bottom-nav">
   <div class="nav-item active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-house"></i> Feed</div>
   <div class="nav-item" data-nav="groups" onclick="switchNav('groups')"><i class="fa-solid fa-users"></i> Groups</div>
+  <div class="nav-item" data-nav="market" onclick="switchNav('market')"><i class="fa-solid fa-store"></i> Market</div>
+  <div class="nav-item" data-nav="chat" onclick="switchNav('chat')"><i class="fa-solid fa-comments"></i> Chat</div>
 </div>
 
 <script>
@@ -1226,6 +1949,11 @@ function switchNav(target) {
 
   if(target === 'feed') loadPosts('Social', 'feed-posts-container');
   if(target === 'groups') loadGroups();
+  if(target === 'events') loadEventsFeed();
+  if(target === 'market') loadCategoryListings('Market', 'products-container');
+  if(target === 'beauty') loadCategoryListings('Beauty', 'beauty-container');
+  if(target === 'jobs') loadCategoryListings('Jobs', 'jobs-container');
+  if(target === 'chat') loadChatPartners();
 }
 
 async function checkSession() {
@@ -1246,7 +1974,7 @@ async function checkSession() {
 function renderHeaderAuth() {
   const box = document.getElementById('header-auth');
   if(currentUser) {
-    box.innerHTML = `<b style="font-size:0.82rem;">@${currentUser.username}</b>`;
+    box.innerHTML = `<b style="font-size:0.82rem;cursor:pointer;" onclick="openProfile('${currentUser.username}')">@${currentUser.username}</b>`;
   } else {
     box.innerHTML = `<a href="/auth" style="background:var(--fb-blue);color:#fff;text-decoration:none;padding:6px 12px;border-radius:16px;font-weight:700;font-size:0.75rem;">Sign In</a>`;
   }
@@ -1296,7 +2024,7 @@ async function openGroupDetail(groupId) {
         <p style="font-size:0.78rem;color:var(--text-muted);">${g.member_count} Members</p>
       </div>
       <div>
-        ${g.is_creator ? `<button onclick="openGroupEditModal(${g.id}, '${g.name.replace(/'/g, "\\'")}', '${(g.description||'').replace(/'/g, "\\'")}')" class="btn-group-edit"><i class="fa-solid fa-pen"></i> Edit Group</button>` : ''}
+        ${g.is_creator ? `<button onclick="openGroupEditModal(${g.id}, '${g.name.replace(/'/g, "\\'")}', '${(g.description||'').replace(/'/g, "\\'")}')" class="btn-group-edit"><i class="fa-solid fa-pen-to-square"></i> Edit Group Details</button>` : ''}
         <button onclick="joinGroup(${g.id})" class="btn-submit" style="width:auto;padding:8px 14px;font-size:0.8rem;background:${g.is_member ? '#ef4444' : 'var(--fb-blue)'};">
           ${g.is_member ? 'Leave Group' : 'Join Group'}
         </button>
@@ -1317,6 +2045,8 @@ async function openGroupDetail(groupId) {
 function openGroupCreateModal() {
   document.getElementById('edit-group-id').value = "0";
   document.getElementById('group-modal-title').innerText = "Create Group";
+  document.getElementById('grp-name').value = "";
+  document.getElementById('grp-desc').value = "";
   document.getElementById('group-create-modal').style.display = 'flex';
 }
 
@@ -1397,11 +2127,11 @@ function renderPostCard(p) {
   return `
     <div class="feed-post">
       <div class="post-header">
-        <div class="avatar" style="background:var(--fb-blue);">
+        <div class="avatar" style="background:var(--fb-blue);" onclick="openProfile('${p.username}')">
           ${p.avatar_url ? `<img src="${p.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : p.full_name.charAt(0)}
         </div>
         <div>
-          <div style="font-size:0.85rem;font-weight:800;">${p.full_name}</div>
+          <div style="font-size:0.85rem;font-weight:800;cursor:pointer;" onclick="openProfile('${p.username}')">${p.full_name}</div>
           <div style="font-size:0.7rem;color:var(--text-muted);">@${p.username}</div>
         </div>
         ${groupBadge}
@@ -1576,7 +2306,7 @@ body { background: #f0f2f5; color: #0f172a; display: flex; flex-direction: colum
 <body>
 <div class="auth-card">
   <div class="brand">IJEBU CONNECT</div>
-  <p style="font-size:0.78rem;color:#64748b;margin-bottom:12px;">Sign in to join groups and participate in discussion.</p>
+  <p style="font-size:0.78rem;color:#64748b;margin-bottom:12px;">Sign in to join groups and connect.</p>
   <form id="form-login" onsubmit="handleLogin(event)">
     <div class="form-group"><label>Username or Phone</label><input type="text" id="login-uname" class="form-control" required></div>
     <div class="form-group"><label>Password</label><input type="password" id="login-pword" class="form-control" required></div>
@@ -1788,3 +2518,4 @@ def admin_page():
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=True)
+    
