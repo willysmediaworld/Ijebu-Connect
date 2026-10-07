@@ -56,12 +56,33 @@ UPLOAD_FOLDER = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-ALLOWED_IMAGE_EXTS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
+ALLOWED_IMAGE_EXTS = {'png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'}
 ALLOWED_VIDEO_EXTS = {'mp4', 'webm', 'mov', 'm4v', 'avi'}
 ALLOWED_EXTENSIONS = ALLOWED_IMAGE_EXTS.union(ALLOWED_VIDEO_EXTS)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# LOGO DETECTION HELPER
+def get_system_logos():
+    """Detects and returns the 1st logo for AUTH and 2nd logo for MAIN SYSTEM from static folder."""
+    static_dir = os.path.join(app.root_path, 'static')
+    valid_exts = ('.png', '.jpg', '.jpeg', '.webp', '.svg', '.gif')
+    found_files = []
+
+    if os.path.exists(static_dir):
+        for f in sorted(os.listdir(static_dir)):
+            if f.lower().endswith(valid_exts) and not f.startswith('.'):
+                found_files.append(f"/static/{f}")
+
+    if os.path.exists(UPLOAD_FOLDER):
+        for f in sorted(os.listdir(UPLOAD_FOLDER)):
+            if f.lower().endswith(valid_exts) and not f.startswith('.'):
+                found_files.append(f"/static/uploads/{f}")
+
+    logo1 = found_files[0] if len(found_files) > 0 else "/static/logo1.png"
+    logo2 = found_files[1] if len(found_files) > 1 else (found_files[0] if len(found_files) > 0 else "/static/logo2.png")
+    return logo1, logo2
 
 # HTTP CACHING & SPEED OPTIMIZATION FOR STATIC ASSETS
 @app.after_request
@@ -135,8 +156,10 @@ def count_user_listings(user_id):
 
 # HARDCODED SEEDING TO PREVENT RENDER DATABASE RESET LOSSES
 def seed_hardcoded_data(cursor, db):
-    logger.info("Executing hardcoded seeding for Render environment protection...")
+    logger.info("Executing hardcoded seeding for Render environment persistence...")
     p = query_param()
+    
+    # Core Admin Seed
     admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect').lower()
     admin_password = os.environ.get('ADMIN_SEED_PASSWORD', 'Rotimi1972connect')
     admin_phone = os.environ.get('ADMIN_SEED_PHONE', '09018363715')
@@ -171,6 +194,23 @@ def seed_hardcoded_data(cursor, db):
             db.rollback()
             logger.error(f"Error updating admin seed: {e}")
 
+    # HARDCODED SEEDED MEMBERS (Prevents member loss on Render SQLite resets)
+    hardcoded_members = [
+        ("Willys Media Support", "09018363715", "willysmedia", "CPN00002", "CPN Partner"),
+        ("Ijebu Imusin Youth Forum", "08000000001", "ijebuyouths", "CPN00003", "Resident")
+    ]
+
+    for m_name, m_phone, m_uname, m_ref, m_type in hardcoded_members:
+        cursor.execute(f"SELECT id FROM users WHERE username = {p} OR phone = {p}", (m_uname, m_phone))
+        if not cursor.fetchone():
+            try:
+                cursor.execute(f'''
+                    INSERT INTO users (full_name, phone, username, password_hash, user_type, referral_code)
+                    VALUES ({p}, {p}, {p}, {p}, {p}, {p})
+                ''', (m_name, m_phone, m_uname, generate_password_hash("Password123"), m_type, m_ref))
+            except Exception as e:
+                logger.error(f"Error seeding member {m_uname}: {e}")
+
     # Preload Official Pages
     cursor.execute("SELECT id FROM groups WHERE name LIKE '%Ijebu Imusin%'")
     if not cursor.fetchone():
@@ -199,7 +239,7 @@ def seed_hardcoded_data(cursor, db):
         ''', (admin_id, page2_id))
 
     db.commit()
-    logger.info("Seeding completed successfully.")
+    logger.info("Hardcoded seeding completed successfully.")
 
 def init_db():
     with app.app_context():
@@ -1588,8 +1628,10 @@ body { background: var(--bg-body); color: var(--text-dark); display: flex; flex-
 #toast-container { position: fixed; top: 12px; right: 12px; left: 12px; z-index: 9999; }
 .toast { background: var(--navy-blue); color: #fff; padding: 12px; border-radius: 12px; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; text-align: center; }
 
-header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-light); position: sticky; top:0; z-index: 100; }
-.brand-title { font-size: 1.15rem; font-weight: 800; color: var(--navy-blue); cursor: pointer; }
+header { background: #fff; padding: 0.6rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-light); position: sticky; top:0; z-index: 100; }
+.header-brand { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+.header-logo-img { height: 38px; width: auto; max-width: 130px; object-fit: contain; border-radius: 6px; }
+.brand-title { font-size: 1.1rem; font-weight: 800; color: var(--navy-blue); }
 .brand-title span { color: var(--fb-blue); }
 
 .top-nav-pills { display: flex; gap: 6px; padding: 0.6rem 0.5rem; background: #fff; border-bottom: 1px solid var(--border-light); overflow-x: auto; scrollbar-width: none; }
@@ -1653,7 +1695,10 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 <div id="toast-container"></div>
 
 <header>
-  <div class="brand-title" onclick="switchNav('feed')">IJEBU <span>CONNECT</span></div>
+  <div class="header-brand" onclick="switchNav('feed')">
+    <img src="{{ app_logo }}" alt="Logo" class="header-logo-img" onerror="this.style.display='none'">
+    <div class="brand-title">IJEBU <span>CONNECT</span></div>
+  </div>
   <div id="header-auth"></div>
 </header>
 
@@ -1934,7 +1979,6 @@ function showToast(msg, type = 'success') {
   setTimeout(() => toast.remove(), 3500);
 }
 
-// FORMAT TIMESTAMP FUNCTION FOR POSTS & COMMENTS
 function formatTimestamp(ts) {
   if (!ts) return '';
   try {
@@ -1979,7 +2023,7 @@ async function checkSession() {
     } else {
       currentUser = null;
       renderHeaderAuth();
-      window.location.href = '/auth'; // ALWAYS LOAD AUTH FIRST IF NOT LOGGED IN
+      window.location.href = '/auth'; // LOAD AUTH FIRST IF NOT LOGGED IN
     }
   } catch(e){}
 }
@@ -2588,25 +2632,50 @@ AUTH_TEMPLATE = r"""
 <title>Auth - Ijebu Connect</title>
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
-:root { --fb-blue: #1877f2; --border-light: #cbd5e1; }
+:root { --fb-blue: #1877f2; --navy-blue: #0b1e36; --border-light: #cbd5e1; }
 * { box-sizing: border-box; margin:0; padding:0; font-family:'Plus Jakarta Sans', sans-serif; }
 body { background: #f0f2f5; color: #0f172a; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 1rem; }
-.auth-card { background: #fff; border: 1px solid var(--border-light); border-radius: 18px; padding: 1.5rem; max-width: 440px; width: 100%; text-align: center; }
+.auth-card { background: #fff; border: 1px solid var(--border-light); border-radius: 18px; padding: 1.5rem; max-width: 440px; width: 100%; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+
+.auth-logo-img { max-height: 75px; width: auto; object-fit: contain; margin-bottom: 10px; border-radius: 8px; }
 .brand { font-size: 1.5rem; font-weight: 800; color: var(--fb-blue); margin-bottom: 0.2rem; }
+
+.auth-tabs { display: flex; margin: 12px 0; border-bottom: 2px solid #e2e8f0; }
+.auth-tab-btn { flex: 1; padding: 10px; border: none; background: none; font-weight: 700; font-size: 0.88rem; color: #64748b; cursor: pointer; }
+.auth-tab-btn.active { color: var(--fb-blue); border-bottom: 3px solid var(--fb-blue); }
+
 .form-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 0.85rem; text-align: left; }
 .form-control { padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--border-light); font-size: 0.88rem; outline: none; width: 100%; }
-.btn-submit { background: var(--fb-blue); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.88rem; cursor: pointer; width: 100%; }
+.btn-submit { background: var(--fb-blue); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.88rem; cursor: pointer; width: 100%; margin-top: 6px; }
 .app-footer { margin-top: 1.5rem; text-align: center; font-size: 0.75rem; color: #64748b; }
 </style>
 </head>
 <body>
 <div class="auth-card">
+  <img src="{{ auth_logo }}" alt="Logo" class="auth-logo-img" onerror="this.style.display='none'">
   <div class="brand">IJEBU CONNECT</div>
-  <p style="font-size:0.78rem;color:#64748b;margin-bottom:12px;">Sign in to join pages and connect.</p>
+  <p style="font-size:0.78rem;color:#64748b;">Connect, network, and trade across Ijebu.</p>
+  
+  <div class="auth-tabs">
+    <button class="auth-tab-btn active" id="tab-login" onclick="switchAuthTab('login')">Sign In</button>
+    <button class="auth-tab-btn" id="tab-register" onclick="switchAuthTab('register')">Register New Member</button>
+  </div>
+
+  <!-- LOGIN FORM -->
   <form id="form-login" onsubmit="handleLogin(event)">
-    <div class="form-group"><label>Username or Phone</label><input type="text" id="login-uname" class="form-control" required></div>
-    <div class="form-group"><label>Password</label><input type="password" id="login-pword" class="form-control" required></div>
+    <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Username or Phone</label><input type="text" id="login-uname" class="form-control" required></div>
+    <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Password</label><input type="password" id="login-pword" class="form-control" required></div>
     <button type="submit" class="btn-submit">Sign In</button>
+  </form>
+
+  <!-- REGISTER FORM -->
+  <form id="form-register" onsubmit="handleRegister(event)" style="display:none;">
+    <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Full Name</label><input type="text" id="reg-fullname" class="form-control" placeholder="e.g. Adewale Adebayo" required></div>
+    <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Phone Number</label><input type="tel" id="reg-phone" class="form-control" placeholder="e.g. 09018363715" required></div>
+    <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Username</label><input type="text" id="reg-username" class="form-control" placeholder="e.g. adewale2026" required></div>
+    <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Password</label><input type="password" id="reg-password" class="form-control" required></div>
+    <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Referral Code (Optional)</label><input type="text" id="reg-ref" class="form-control" placeholder="e.g. CPN00001"></div>
+    <button type="submit" class="btn-submit" style="background:var(--navy-blue);">Create Account</button>
   </form>
 </div>
 
@@ -2616,6 +2685,20 @@ body { background: #f0f2f5; color: #0f172a; display: flex; flex-direction: colum
 </footer>
 
 <script>
+function switchAuthTab(type) {
+  if (type === 'login') {
+    document.getElementById('tab-login').classList.add('active');
+    document.getElementById('tab-register').classList.remove('active');
+    document.getElementById('form-login').style.display = 'block';
+    document.getElementById('form-register').style.display = 'none';
+  } else {
+    document.getElementById('tab-register').classList.add('active');
+    document.getElementById('tab-login').classList.remove('active');
+    document.getElementById('form-register').style.display = 'block';
+    document.getElementById('form-login').style.display = 'none';
+  }
+}
+
 async function handleLogin(e) {
   e.preventDefault();
   const res = await fetch('/api/auth/login', {
@@ -2629,6 +2712,27 @@ async function handleLogin(e) {
   const data = await res.json();
   if(data.success) { window.location.href = '/'; }
   else alert(data.message);
+}
+
+async function handleRegister(e) {
+  e.preventDefault();
+  const res = await fetch('/api/auth/register', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({
+      full_name: document.getElementById('reg-fullname').value,
+      phone: document.getElementById('reg-phone').value,
+      username: document.getElementById('reg-username').value,
+      password: document.getElementById('reg-password').value,
+      referred_by: document.getElementById('reg-ref').value
+    })
+  });
+  const data = await res.json();
+  alert(data.message);
+  if (data.success) {
+    switchAuthTab('login');
+    document.getElementById('login-uname').value = document.getElementById('reg-username').value;
+  }
 }
 </script>
 </body>
@@ -2876,6 +2980,8 @@ def index():
     meta_image = f"{host_url.rstrip('/')}/static/uploads/default_preview.jpg"
     meta_url = request.url
 
+    logo1, logo2 = get_system_logos()
+
     return render_template_string(
         INDEX_TEMPLATE,
         contact_email=CONTACT_EMAIL,
@@ -2884,12 +2990,19 @@ def index():
         meta_desc=meta_desc,
         meta_image=meta_image,
         meta_url=meta_url,
+        app_logo=logo2,
         deep_link_json='null'
     )
 
 @app.route('/auth')
 def auth_page():
-    return render_template_string(AUTH_TEMPLATE, contact_email=CONTACT_EMAIL, company_name=COMPANY_NAME)
+    logo1, logo2 = get_system_logos()
+    return render_template_string(
+        AUTH_TEMPLATE,
+        contact_email=CONTACT_EMAIL,
+        company_name=COMPANY_NAME,
+        auth_logo=logo1
+    )
 
 @app.route('/admin')
 def admin_page():
