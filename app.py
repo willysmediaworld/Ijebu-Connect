@@ -65,7 +65,7 @@ def allowed_file(filename):
 
 # LOGO DETECTION HELPER
 def get_system_logos():
-    """Detects and returns the 1st logo for AUTH and 2nd logo for MAIN SYSTEM from static folder."""
+    """Detects and returns 1st logo for AUTH page and 2nd logo for MAIN SYSTEM."""
     static_dir = os.path.join(app.root_path, 'static')
     valid_exts = ('.png', '.jpg', '.jpeg', '.webp', '.svg', '.gif')
     found_files = []
@@ -159,7 +159,6 @@ def seed_hardcoded_data(cursor, db):
     logger.info("Executing hardcoded seeding for Render environment persistence...")
     p = query_param()
     
-    # Core Admin Seed
     admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect').lower()
     admin_password = os.environ.get('ADMIN_SEED_PASSWORD', 'Rotimi1972connect')
     admin_phone = os.environ.get('ADMIN_SEED_PHONE', '09018363715')
@@ -194,7 +193,7 @@ def seed_hardcoded_data(cursor, db):
             db.rollback()
             logger.error(f"Error updating admin seed: {e}")
 
-    # HARDCODED SEEDED MEMBERS (Prevents member loss on Render SQLite resets)
+    # HARDCODED SEEDED MEMBERS
     hardcoded_members = [
         ("Willys Media Support", "09018363715", "willysmedia", "CPN00002", "CPN Partner"),
         ("Ijebu Imusin Youth Forum", "08000000001", "ijebuyouths", "CPN00003", "Resident")
@@ -501,6 +500,40 @@ def upload_media():
         logger.info(f"File uploaded successfully: {file_url}")
         return jsonify({'success': True, 'url': file_url, 'is_video': is_video})
     return jsonify({'success': False, 'message': 'Unsupported file format.'}), 400
+
+# ======================================================================
+# GLOBAL SEARCH API (MEMBERS & PAGES)
+# ======================================================================
+@app.route('/api/search', methods=['GET'])
+def global_search():
+    q = request.args.get('q', '').strip().lower()
+    if not q:
+        return jsonify({'success': True, 'users': [], 'pages': []})
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    # Search Users
+    cursor.execute(f'''
+        SELECT id, full_name, username, user_type, avatar_url, occupation
+        FROM users 
+        WHERE LOWER(full_name) LIKE {p} OR LOWER(username) LIKE {p} OR LOWER(occupation) LIKE {p}
+        ORDER BY id DESC LIMIT 15
+    ''', (f"%{q}%", f"%{q}%", f"%{q}%"))
+    users = [dict(r) for r in cursor.fetchall()]
+
+    # Search Pages
+    cursor.execute(f'''
+        SELECT g.id, g.name, g.category, g.avatar_url, g.description,
+               (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) AS member_count
+        FROM groups g
+        WHERE LOWER(g.name) LIKE {p} OR LOWER(g.description) LIKE {p}
+        ORDER BY g.id DESC LIMIT 15
+    ''', (f"%{q}%", f"%{q}%"))
+    pages = [dict(r) for r in cursor.fetchall()]
+
+    return jsonify({'success': True, 'users': users, 'pages': pages})
 
 # ======================================================================
 # CPN COMMISSION ENGINE
@@ -1628,16 +1661,22 @@ body { background: var(--bg-body); color: var(--text-dark); display: flex; flex-
 #toast-container { position: fixed; top: 12px; right: 12px; left: 12px; z-index: 9999; }
 .toast { background: var(--navy-blue); color: #fff; padding: 12px; border-radius: 12px; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; text-align: center; }
 
-header { background: #fff; padding: 0.6rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-light); position: sticky; top:0; z-index: 100; }
-.header-brand { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.header-logo-img { height: 38px; width: auto; max-width: 130px; object-fit: contain; border-radius: 6px; }
-.brand-title { font-size: 1.1rem; font-weight: 800; color: var(--navy-blue); }
+header { background: #fff; padding: 0.6rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-light); position: sticky; top:0; z-index: 100; gap: 8px; }
+.header-brand { display: flex; align-items: center; gap: 8px; cursor: pointer; flex-shrink: 0; }
+.header-logo-img { height: 36px; width: auto; max-width: 120px; object-fit: contain; border-radius: 6px; }
+.brand-title { font-size: 1.05rem; font-weight: 800; color: var(--navy-blue); }
 .brand-title span { color: var(--fb-blue); }
+
+.global-search-wrap { position: relative; flex: 1; max-width: 240px; }
+.global-search-input { padding: 6px 12px 6px 32px; border-radius: 20px; border: 1.5px solid var(--border-light); font-size: 0.78rem; outline: none; width: 100%; background: #f0f2f5; }
+.global-search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.75rem; }
 
 .top-nav-pills { display: flex; gap: 6px; padding: 0.6rem 0.5rem; background: #fff; border-bottom: 1px solid var(--border-light); overflow-x: auto; scrollbar-width: none; }
 .top-nav-pills::-webkit-scrollbar { display: none; }
-.nav-pill { padding: 6px 14px; border-radius: 20px; font-size: 0.78rem; font-weight: 700; background: #f0f2f5; color: var(--text-muted); cursor: pointer; flex-shrink: 0; }
+.nav-pill { padding: 6px 14px; border-radius: 20px; font-size: 0.78rem; font-weight: 700; background: #f0f2f5; color: var(--text-muted); cursor: pointer; flex-shrink: 0; display: flex; align-items: center; gap: 4px; }
 .nav-pill.active { background: var(--fb-blue); color: #fff; }
+
+.unread-badge { background: #ef4444; color: #fff; font-size: 0.65rem; font-weight: 800; padding: 2px 6px; border-radius: 10px; line-height: 1; }
 
 .app-container { max-width: 620px; margin: 0 auto; width: 100%; padding: 0.75rem; flex: 1; }
 .view-section { display: none; }
@@ -1647,23 +1686,6 @@ header { background: #fff; padding: 0.6rem 1rem; display: flex; justify-content:
 /* FACEBOOK STYLE COVER BANNERS */
 .fb-group-banner { height: 160px; background: linear-gradient(135deg, #1877f2, #0b1e36); border-radius: 12px 12px 0 0; position: relative; margin: -1rem -1rem 45px -1rem; background-size: cover; background-position: center; }
 .fb-group-avatar { position: absolute; bottom: -35px; left: 16px; width: 75px; height: 75px; border-radius: 16px; border: 4px solid #fff; background: var(--fb-blue); overflow: hidden; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 800; }
-
-.btn-group-edit {
-  background: #f0f2f5;
-  border: 1.5px solid var(--border-light);
-  padding: 10px 18px;
-  border-radius: 10px;
-  font-weight: 800;
-  font-size: 0.92rem;
-  color: var(--navy-blue);
-  cursor: pointer;
-  min-height: 44px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: 8px;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.08);
-}
 
 .feed-post { background: #fff; border: 1px solid var(--border-light); border-radius: 12px; padding: 0.88rem; margin-bottom: 0.85rem; }
 .post-header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
@@ -1681,7 +1703,7 @@ header { background: #fff; padding: 0.6rem 1rem; display: flex; justify-content:
 .form-control { padding: 10px 12px; border-radius: 8px; border: 1.5px solid var(--border-light); font-size: 0.88rem; outline: none; width: 100%; background: #fff; }
 
 .mobile-bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--border-light); display: flex; justify-content: space-around; padding: 6px 0; z-index: 1000; height: 60px; }
-.nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); font-size: 0.7rem; font-weight: 700; flex: 1; cursor: pointer; text-decoration: none; }
+.nav-item { display: flex; flex-direction: column; align-items: center; justify-content: center; color: var(--text-muted); font-size: 0.7rem; font-weight: 700; flex: 1; cursor: pointer; text-decoration: none; position: relative; }
 .nav-item.active { color: var(--fb-blue); }
 
 .app-footer { background: #fff; border-top: 1px solid var(--border-light); padding: 1.2rem; text-align: center; font-size: 0.78rem; color: var(--text-muted); margin-top: 2rem; }
@@ -1699,12 +1721,22 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
     <img src="{{ app_logo }}" alt="Logo" class="header-logo-img" onerror="this.style.display='none'">
     <div class="brand-title">IJEBU <span>CONNECT</span></div>
   </div>
+
+  <div class="global-search-wrap">
+    <i class="fa-solid fa-magnifying-glass global-search-icon"></i>
+    <input type="text" class="global-search-input" placeholder="Search members, pages..." onkeyup="handleGlobalSearch(this.value)">
+  </div>
+
   <div id="header-auth"></div>
 </header>
 
 <div class="top-nav-pills">
   <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-house"></i> Main Feed</div>
   <div class="nav-pill" data-nav="pages" onclick="switchNav('pages')"><i class="fa-solid fa-flag"></i> Pages</div>
+  <div class="nav-pill" data-nav="chat" onclick="switchNav('chat')">
+    <i class="fa-solid fa-comments"></i> Chat 
+    <span class="unread-badge chat-unread-badge" style="display:none;">0</span>
+  </div>
   <div class="nav-pill" data-nav="events" onclick="switchNav('events')"><i class="fa-solid fa-calendar-days"></i> Events</div>
   <div class="nav-pill" data-nav="market" onclick="switchNav('market')"><i class="fa-solid fa-store"></i> Market</div>
   <div class="nav-pill" data-nav="beauty" onclick="switchNav('beauty')"><i class="fa-solid fa-scissors"></i> Beauty</div>
@@ -1714,6 +1746,12 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 </div>
 
 <div class="app-container">
+  <!-- GLOBAL SEARCH RESULTS SECTION -->
+  <div id="view-search" class="view-section">
+    <h3 style="font-size:1.05rem;font-weight:800;margin-bottom:10px;color:var(--navy-blue);">🔍 Search Results</h3>
+    <div id="search-results-container"></div>
+  </div>
+
   <!-- MAIN FEED -->
   <div id="view-feed" class="view-section active">
     <div class="card">
@@ -1755,6 +1793,26 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
     </div>
     
     <div id="page-posts-container"></div>
+  </div>
+
+  <!-- CHAT / MESSAGES HUB -->
+  <div id="view-chat" class="view-section">
+    <div id="chat-list-wrap">
+      <h3 style="font-size:1rem;font-weight:800;margin-bottom:8px;color:var(--navy-blue);">💬 Messages & Discussions</h3>
+      <div id="chat-partners-container"></div>
+    </div>
+    
+    <div id="chat-thread-wrap" style="display:none;">
+      <button onclick="closeChatThread()" style="background:#fff;border:1px solid var(--border-light);padding:4px 10px;border-radius:8px;font-size:0.75rem;font-weight:700;margin-bottom:8px;">← Back to All Messages</button>
+      <div id="chat-thread-header" class="card" style="padding:0.6rem 0.88rem;margin-bottom:6px;"></div>
+      <div id="chat-messages" style="min-height:240px;max-height:55vh;overflow-y:auto;padding:8px;background:#fff;border-radius:12px;border:1px solid var(--border-light);margin-bottom:8px;"></div>
+      <form onsubmit="sendChatMessage(event)" style="position:sticky;bottom:0;background:var(--bg-body);padding:4px 0;">
+        <div style="display:flex;gap:6px;">
+          <input type="text" id="chat-input" class="form-control" placeholder="Write a message..." style="flex:1;" required>
+          <button type="submit" class="btn-submit" style="width:auto;padding:10px 18px;">Send</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <!-- EVENTS VIEW -->
@@ -1803,25 +1861,6 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
       <button onclick="openDatingSettingsModal()" style="background:#fff;color:#4f46e5;border:none;padding:6px 12px;border-radius:8px;font-weight:800;font-size:0.75rem;">Set Up Dating Profile</button>
     </div>
     <div id="dating-matches-container"></div>
-  </div>
-
-  <!-- CHAT -->
-  <div id="view-chat" class="view-section">
-    <div id="chat-list-wrap">
-      <h3 style="font-size:1rem;font-weight:800;margin-bottom:8px;">Messages</h3>
-      <div id="chat-partners-container"></div>
-    </div>
-    <div id="chat-thread-wrap" style="display:none;">
-      <button onclick="closeChatThread()" style="background:#fff;border:1px solid var(--border-light);padding:4px 10px;border-radius:8px;font-size:0.75rem;font-weight:700;margin-bottom:8px;">← Back to Chat</button>
-      <div id="chat-thread-header" class="card" style="padding:0.5rem 0.88rem;"></div>
-      <div id="chat-messages" style="min-height:220px;max-height:50vh;overflow-y:auto;padding:6px 0;"></div>
-      <form onsubmit="sendChatMessage(event)" style="position:sticky;bottom:0;background:var(--bg-body);padding:6px 0;">
-        <div style="display:flex;gap:6px;">
-          <input type="text" id="chat-input" class="form-control" placeholder="Type a message..." style="flex:1;">
-          <button type="submit" class="btn-submit" style="width:auto;padding:10px 16px;">Send</button>
-        </div>
-      </form>
-    </div>
   </div>
 
   <!-- PUBLIC MEMBER PROFILE VIEW -->
@@ -1961,14 +2000,18 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 <div class="mobile-bottom-nav">
   <div class="nav-item active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-house"></i> Feed</div>
   <div class="nav-item" data-nav="pages" onclick="switchNav('pages')"><i class="fa-solid fa-flag"></i> Pages</div>
+  <div class="nav-item" data-nav="chat" onclick="switchNav('chat')">
+    <i class="fa-solid fa-comments"></i> Chat
+    <span class="unread-badge chat-unread-badge" style="display:none;position:absolute;top:4px;right:18px;">0</span>
+  </div>
   <div class="nav-item" data-nav="market" onclick="switchNav('market')"><i class="fa-solid fa-store"></i> Market</div>
-  <div class="nav-item" data-nav="chat" onclick="switchNav('chat')"><i class="fa-solid fa-comments"></i> Chat</div>
 </div>
 
 <script>
 let currentUser = null;
 let activePageId = 0;
 let replyParentCommentId = 0;
+let activeChatPartner = null;
 
 function showToast(msg, type = 'success') {
   const box = document.getElementById('toast-container');
@@ -2004,11 +2047,11 @@ function switchNav(target) {
 
   if(target === 'feed') loadPosts('Social', 'feed-posts-container');
   if(target === 'pages') loadPages();
+  if(target === 'chat') loadChatPartners();
   if(target === 'events') loadEventsFeed();
   if(target === 'market') loadCategoryListings('Market', 'products-container');
   if(target === 'beauty') loadCategoryListings('Beauty', 'beauty-container');
   if(target === 'jobs') loadCategoryListings('Jobs', 'jobs-container');
-  if(target === 'chat') loadChatPartners();
   if(target === 'dating') loadDatingMatches();
 }
 
@@ -2019,6 +2062,7 @@ async function checkSession() {
     if(data.logged_in) {
       currentUser = data.user;
       renderHeaderAuth();
+      updateUnreadChatBadges(currentUser.unread_chats || 0);
       if(currentUser.user_type === 'Admin') document.getElementById('admin-pill').style.display = 'flex';
     } else {
       currentUser = null;
@@ -2028,15 +2072,25 @@ async function checkSession() {
   } catch(e){}
 }
 
+function updateUnreadChatBadges(count) {
+  const badges = document.querySelectorAll('.chat-unread-badge');
+  badges.forEach(b => {
+    if(count > 0) {
+      b.innerText = count;
+      b.style.display = 'inline-block';
+    } else {
+      b.style.display = 'none';
+    }
+  });
+}
+
 function renderHeaderAuth() {
   const box = document.getElementById('header-auth');
   if(currentUser) {
     box.innerHTML = `
-      <div style="display:flex;align-items:center;gap:10px;">
-        <b style="font-size:0.82rem;cursor:pointer;" onclick="openProfile('${currentUser.username}')">@${currentUser.username}</b>
-        <button onclick="handleLogout()" style="background:#ef4444;color:#fff;border:none;padding:5px 10px;border-radius:12px;font-size:0.72rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
-          <i class="fa-solid fa-right-from-bracket"></i> Logout
-        </button>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <b style="font-size:0.78rem;cursor:pointer;" onclick="openProfile('${currentUser.username}')">@${currentUser.username}</b>
+        <button onclick="handleLogout()" style="background:#ef4444;color:#fff;border:none;padding:4px 8px;border-radius:10px;font-size:0.7rem;font-weight:700;cursor:pointer;">Logout</button>
       </div>`;
   } else {
     box.innerHTML = `<a href="/auth" style="background:var(--fb-blue);color:#fff;text-decoration:none;padding:6px 12px;border-radius:16px;font-weight:700;font-size:0.75rem;">Sign In</a>`;
@@ -2047,6 +2101,174 @@ async function handleLogout() {
   await fetch('/api/auth/logout', { method: 'POST' });
   currentUser = null;
   window.location.href = '/auth';
+}
+
+/* GLOBAL SEARCH JS ENGINE */
+async function handleGlobalSearch(q) {
+  q = q.trim();
+  if(!q) {
+    if(document.getElementById('view-search').classList.contains('active')) switchNav('feed');
+    return;
+  }
+
+  switchNav('search');
+  const container = document.getElementById('search-results-container');
+  container.innerHTML = '<div style="text-align:center;padding:1rem;"><i class="fa-solid fa-spinner fa-spin"></i> Searching...</div>';
+
+  const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+  const data = await res.json();
+
+  let html = '';
+
+  if(data.users && data.users.length) {
+    html += `<h4 style="font-size:0.88rem;margin-bottom:6px;color:var(--text-muted);">Registered Members</h4>`;
+    html += data.users.map(u => `
+      <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="openProfile('${u.username}')">
+          <div class="avatar" style="width:40px;height:40px;background:var(--fb-blue);">${u.avatar_url ? `<img src="${u.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : u.full_name.charAt(0)}</div>
+          <div>
+            <h4 style="font-weight:800;font-size:0.88rem;">${u.full_name}</h4>
+            <p style="font-size:0.72rem;color:var(--text-muted);">@${u.username} • ${u.occupation || u.user_type}</p>
+          </div>
+        </div>
+        <div style="display:flex;gap:4px;">
+          <button onclick="startChatWith('${u.username}')" class="btn-submit" style="width:auto;padding:4px 10px;font-size:0.75rem;background:var(--navy-blue);">Message</button>
+          <button onclick="openProfile('${u.username}')" class="btn-submit" style="width:auto;padding:4px 10px;font-size:0.75rem;">Profile</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  if(data.pages && data.pages.length) {
+    html += `<h4 style="font-size:0.88rem;margin:12px 0 6px;color:var(--text-muted);">Pages & Groups</h4>`;
+    html += data.pages.map(g => `
+      <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="openPageDetail(${g.id})">
+          ${g.avatar_url ? `<img src="${g.avatar_url}" style="width:40px;height:40px;border-radius:10px;object-fit:cover;">` : `<div class="avatar" style="width:40px;height:40px;border-radius:10px;background:var(--fb-blue);"><i class="fa-solid fa-flag"></i></div>`}
+          <div>
+            <h4 style="font-weight:800;font-size:0.88rem;">${g.name}</h4>
+            <p style="font-size:0.72rem;color:var(--text-muted);">${g.member_count} Followers</p>
+          </div>
+        </div>
+        <button onclick="openPageDetail(${g.id})" class="btn-submit" style="width:auto;padding:4px 10px;font-size:0.75rem;">Visit Page</button>
+      </div>
+    `).join('');
+  }
+
+  if(!html) {
+    html = `<div class="card" style="text-align:center;">No matching members or pages found for "${q}".</div>`;
+  }
+
+  container.innerHTML = html;
+}
+
+/* CHAT & MESSAGING ENGINE */
+async function loadChatPartners() {
+  if(!currentUser) return window.location.href = '/auth';
+  const res = await fetch('/api/chat/partners');
+  const data = await res.json();
+  const c = document.getElementById('chat-partners-container');
+
+  if(!data.success || !data.partners.length) {
+    c.innerHTML = '<div class="card" style="text-align:center;">No messages yet. Use the search bar or user profiles to start a discussion!</div>';
+    updateUnreadChatBadges(0);
+    return;
+  }
+
+  let totalUnread = 0;
+  c.innerHTML = data.partners.map(p => {
+    totalUnread += (p.unread || 0);
+    return `
+      <div class="card" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;" onclick="openChatThread('${p.user.username}')">
+        <div style="display:flex;align-items:center;gap:10px;flex:1;">
+          <div class="avatar" style="width:44px;height:44px;background:var(--fb-blue);">${p.user.avatar_url ? `<img src="${p.user.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : p.user.full_name.charAt(0)}</div>
+          <div style="flex:1;">
+            <h4 style="font-weight:800;font-size:0.88rem;display:flex;align-items:center;justify-content:space-between;">
+              ${p.user.full_name}
+              ${p.unread > 0 ? `<span class="unread-badge">${p.unread} New</span>` : ''}
+            </h4>
+            <p style="font-size:0.78rem;color:var(--text-muted);">${p.last_from_me ? 'You: ' : ''}${p.last_message || 'Started a chat'}</p>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  updateUnreadChatBadges(totalUnread);
+}
+
+function startChatWith(username) {
+  switchNav('chat');
+  openChatThread(username);
+}
+
+async function openChatThread(username) {
+  if(!currentUser) return window.location.href = '/auth';
+  activeChatPartner = username;
+  document.getElementById('chat-list-wrap').style.display = 'none';
+  document.getElementById('chat-thread-wrap').style.display = 'block';
+
+  const res = await fetch(`/api/chat/${encodeURIComponent(username)}`);
+  const data = await res.json();
+  if(!data.success) return showToast(data.message, 'error');
+
+  const other = data.other;
+  document.getElementById('chat-thread-header').innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="avatar" style="width:36px;height:36px;background:var(--fb-blue);">${other.avatar_url ? `<img src="${other.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : other.full_name.charAt(0)}</div>
+      <div>
+        <h4 style="font-weight:800;font-size:0.9rem;">${other.full_name}</h4>
+        <p style="font-size:0.7rem;color:var(--text-muted);">@${other.username}</p>
+      </div>
+    </div>
+  `;
+
+  const msgsBox = document.getElementById('chat-messages');
+  if(!data.messages.length) {
+    msgsBox.innerHTML = '<div style="text-align:center;color:var(--text-muted);padding:1rem;">Send a message to start chatting!</div>';
+  } else {
+    msgsBox.innerHTML = data.messages.map(m => {
+      const isMe = m.sender_id === data.me_id;
+      return `
+        <div style="display:flex;justify-content:${isMe ? 'flex-end' : 'flex-start'};margin-bottom:6px;">
+          <div style="max-width:75%;padding:8px 12px;border-radius:12px;font-size:0.82rem;background:${isMe ? 'var(--fb-blue)' : '#f0f2f5'};color:${isMe ? '#fff' : '#050505'};">
+            ${m.content}
+            <div style="font-size:0.62rem;opacity:0.75;text-align:right;margin-top:2px;">${formatTimestamp(m.created_at)}</div>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+  msgsBox.scrollTop = msgsBox.scrollHeight;
+  loadChatPartners();
+}
+
+function closeChatThread() {
+  activeChatPartner = null;
+  document.getElementById('chat-thread-wrap').style.display = 'none';
+  document.getElementById('chat-list-wrap').style.display = 'block';
+  loadChatPartners();
+}
+
+async function sendChatMessage(e) {
+  e.preventDefault();
+  if(!activeChatPartner) return;
+  const input = document.getElementById('chat-input');
+  const content = input.value.trim();
+  if(!content) return;
+
+  const res = await fetch(`/api/chat/${encodeURIComponent(activeChatPartner)}`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({content})
+  });
+  const data = await res.json();
+  if(data.success) {
+    input.value = '';
+    openChatThread(activeChatPartner);
+  } else {
+    showToast(data.message, 'error');
+  }
 }
 
 function startSellItem(type = 'Market') {
@@ -2246,6 +2468,7 @@ async function openProfile(username) {
       <p style="font-size:0.82rem;color:var(--text-muted);">${u.bio || 'Resident of Ijebu'}</p>
       <div style="display:flex;gap:6px;margin-top:10px;">
         ${isSelf ? `<button onclick="openEditProfileModal()" class="btn-submit" style="font-size:0.78rem;">✏️ Edit Profile Details</button>` : `
+          <button onclick="startChatWith('${u.username}')" class="btn-submit" style="font-size:0.78rem;background:var(--navy-blue);"><i class="fa-solid fa-paper-plane"></i> Message</button>
           <button onclick="toggleFollow('${u.username}')" class="btn-submit" style="font-size:0.78rem;">${u.is_following ? 'Unfollow' : 'Follow'}</button>
         `}
       </div>
