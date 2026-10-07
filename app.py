@@ -119,7 +119,7 @@ def count_user_listings(user_id):
     ad_post_count = cursor.fetchone()[0]
     return prod_count + ad_post_count
 
-# HARDCODED DATA SEEDER TO PREVENT DB LOSS ON RENDER RESTARTS
+# HARDCODED SEEDING TO PREVENT DB RESET LOSSES ON RENDER
 def seed_hardcoded_data(cursor, db):
     p = query_param()
     admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect').lower()
@@ -157,7 +157,7 @@ def seed_hardcoded_data(cursor, db):
     if cursor.fetchone()[0] == 0:
         cursor.execute(f'''
         INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
-        VALUES ({p}, 'Ijebu Traders Network', 'Official business and networking group for Ijebu traders and service providers.', 'Business', '', '')
+        VALUES ({p}, 'Ijebu Traders Network', 'Official business and networking hub for Ijebu traders and service providers.', 'Business', '', '')
         ''', (admin_id,))
         g1_id = cursor.lastrowid or 1
 
@@ -165,7 +165,7 @@ def seed_hardcoded_data(cursor, db):
         
         cursor.execute(f'''
         INSERT INTO posts (user_id, group_id, content, post_type)
-        VALUES ({p}, {p}, 'Welcome to Ijebu Connect! Connect, trade, and build community with us.', 'Social')
+        VALUES ({p}, {p}, 'Welcome to Ijebu Connect! Connect with members, list products, and join groups.', 'Social')
         ''', (admin_id, g1_id))
         db.commit()
 
@@ -785,7 +785,7 @@ def toggle_follow(username):
     return jsonify({'success': True, 'following': following, 'message': msg})
 
 # ======================================================================
-# GROUPS API (WITH PROMINENT EDIT DETAILS)
+# GROUPS API
 # ======================================================================
 @app.route('/api/groups', methods=['GET', 'POST'])
 def handle_groups():
@@ -1176,7 +1176,7 @@ def handle_posts():
     post_type_filter = request.args.get('type', 'Social')
     group_filter = int(request.args.get('group_id') or 0)
 
-    # GROUP POSTS CROSS-POST TO MAIN FEED (when group_filter == 0)
+    # GROUP POSTS CROSS-POST TO MAIN FEED
     if group_filter > 0:
         cursor.execute(f'''
             SELECT p.id, p.user_id, p.group_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
@@ -1487,7 +1487,7 @@ def chat_thread(username):
     return jsonify({'success': True, 'other': dict(other), 'messages': messages, 'me_id': uid})
 
 # ======================================================================
-# ADMIN API (WITH POST DELETION & MODERATION)
+# ADMIN API
 # ======================================================================
 @app.route('/api/admin/overview', methods=['GET'])
 def get_admin_overview():
@@ -1702,7 +1702,7 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 .view-section.active { display: block; }
 .card { background: #fff; border: 1px solid var(--border-light); border-radius: 12px; padding: 1rem; margin-bottom: 0.85rem; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
 
-/* FACEBOOK GROUP BANNER & PROMINENT EDIT BUTTON */
+/* FACEBOOK STYLE COVER BANNERS */
 .fb-group-banner { height: 160px; background: linear-gradient(135deg, #1877f2, #0b1e36); border-radius: 12px 12px 0 0; position: relative; margin: -1rem -1rem 45px -1rem; background-size: cover; background-position: center; }
 .fb-group-avatar { position: absolute; bottom: -35px; left: 16px; width: 75px; height: 75px; border-radius: 16px; border: 4px solid #fff; background: var(--fb-blue); overflow: hidden; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 800; }
 
@@ -1761,7 +1761,7 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 </header>
 
 <div class="top-nav-pills">
-  <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-house"></i> Main Feed</div>
+  <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-house"></i> Feed</div>
   <div class="nav-pill" data-nav="groups" onclick="switchNav('groups')"><i class="fa-solid fa-users"></i> Groups</div>
   <div class="nav-pill" data-nav="events" onclick="switchNav('events')"><i class="fa-solid fa-calendar-days"></i> Events</div>
   <div class="nav-pill" data-nav="market" onclick="switchNav('market')"><i class="fa-solid fa-store"></i> Market</div>
@@ -1803,14 +1803,14 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
     <div id="group-detail-header" class="card"></div>
 
     <div class="card" id="group-post-composer" style="display:none;">
-      <h4 style="font-size:0.88rem; font-weight:800; margin-bottom:6px;">Post to Group (Appears on Main Feed too)</h4>
+      <h4 style="font-size:0.88rem; font-weight:800; margin-bottom:6px;">Post to Group (Shows on Main Feed too)</h4>
       <form onsubmit="handleGroupPostSubmit(event)">
         <input type="hidden" id="active-group-id" value="0">
         <textarea class="form-control" id="group-post-content" rows="2" placeholder="Write something in this group..."></textarea>
         <div style="display:flex;gap:8px;align-items:center;margin:8px 0;">
           <input type="file" id="group-post-file-input" class="form-control" accept="image/*,video/*" style="padding:4px;">
         </div>
-        <button type="submit" class="btn-submit">Publish Post</button>
+        <button type="submit" class="btn-submit">Publish Group Post</button>
       </form>
     </div>
 
@@ -1821,7 +1821,7 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
   <div id="view-events" class="view-section">
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;">
-        <h3 style="font-size:1rem;font-weight:800;">📅 Events & Festivals</h3>
+        <h3 style="font-size:1rem;font-weight:800;">📅 Local Events & Festivals</h3>
         <button onclick="openCreateEventModal()" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.78rem;">+ Create Event</button>
       </div>
     </div>
@@ -1860,7 +1860,7 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
     <div class="card" style="background:linear-gradient(135deg, #4f46e5, #7c3aed);color:#fff;">
       <h3 style="font-weight:800;margin-bottom:4px;">❤️ Ijebu Singles Match</h3>
       <p style="font-size:0.78rem;opacity:0.9;margin-bottom:8px;">Connect with verified singles.</p>
-      <button onclick="openDatingSettingsModal()" style="background:#fff;color:#4f46e5;border:none;padding:6px 12px;border-radius:8px;font-weight:800;font-size:0.75rem;">Set Up Profile</button>
+      <button onclick="openDatingSettingsModal()" style="background:#fff;color:#4f46e5;border:none;padding:6px 12px;border-radius:8px;font-weight:800;font-size:0.75rem;">Set Up Dating Profile</button>
     </div>
     <div id="dating-matches-container"></div>
   </div>
@@ -1884,12 +1884,59 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
     </div>
   </div>
 
-  <!-- PROFILE VIEW -->
+  <!-- PUBLIC MEMBER PROFILE VIEW -->
   <div id="view-profile" class="view-section">
     <button onclick="switchNav('feed')" style="background:#fff;border:1px solid var(--border-light);padding:4px 10px;border-radius:8px;font-weight:700;font-size:0.75rem;margin-bottom:8px;">← Back</button>
     <div id="profile-wall-container"></div>
   </div>
 
+</div>
+
+<!-- EDIT PROFILE MODAL -->
+<div id="edit-profile-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+  <div class="card" style="max-width:440px;width:100%;max-height:90vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+      <h3 style="font-weight:800;color:var(--navy-blue);">Edit Member Profile</h3>
+      <button onclick="closeEditProfileModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+    </div>
+    <form onsubmit="handleProfileUpdateSubmit(event)">
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Full Name</label><input type="text" id="edit-fullname" class="form-control" required></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Phone Number</label><input type="tel" id="edit-phone" class="form-control" required></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Occupation</label><input type="text" id="edit-occupation" class="form-control"></div>
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <div style="flex:1;"><label style="font-size:0.8rem;font-weight:700;">Age</label><input type="number" id="edit-age" class="form-control"></div>
+        <div style="flex:1;"><label style="font-size:0.8rem;font-weight:700;">Gender</label>
+          <select id="edit-gender" class="form-control"><option value="Male">Male</option><option value="Female">Female</option></select>
+        </div>
+      </div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Bio / About</label><textarea id="edit-bio-text" class="form-control" rows="2"></textarea></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Profile Picture (Avatar)</label><input type="file" id="edit-avatar-file" class="form-control" accept="image/*"></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Cover Photo Banner</label><input type="file" id="edit-cover-file" class="form-control" accept="image/*"></div>
+      <button type="submit" class="btn-submit">Save Profile Changes</button>
+    </form>
+  </div>
+</div>
+
+<!-- CPN UPGRADE MODAL -->
+<div id="cpn-upgrade-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+  <div class="card" style="max-width:420px;width:100%;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+      <h3 style="font-weight:800;color:var(--navy-blue);">Upgrade to CPN Partner (₦2,000)</h3>
+      <button onclick="closeCPNModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+    </div>
+    <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:10px;">Unlock unlimited marketplace listings and earn <strong>10% Tier-1 & 5% Tier-2 referral rewards</strong>!</p>
+    <div style="background:#f1f5f9;padding:10px;border-radius:8px;font-size:0.82rem;margin-bottom:10px;border:1px dashed var(--navy-blue);">
+      <strong>🏦 Bank Transfer Details:</strong><br>
+      Bank: <b>OPay</b><br>
+      Account Number: <b style="color:var(--emerald-green);font-size:0.95rem;">09018363715</b><br>
+      Account Name: <b>Rotimi Williams Oladele</b><br>
+      Fee: <b>₦2,000</b>
+    </div>
+    <form onsubmit="handleClaimBankTransfer(event)">
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Sender Name / Reference Note</label><input type="text" id="cpn-ref-note" class="form-control" placeholder="e.g. Paid via OPay / John Doe" required></div>
+      <button type="submit" class="btn-submit">Submit Payment Claim</button>
+    </form>
+  </div>
 </div>
 
 <!-- CREATE/EDIT GROUP MODAL -->
@@ -1954,6 +2001,7 @@ function switchNav(target) {
   if(target === 'beauty') loadCategoryListings('Beauty', 'beauty-container');
   if(target === 'jobs') loadCategoryListings('Jobs', 'jobs-container');
   if(target === 'chat') loadChatPartners();
+  if(target === 'dating') loadDatingMatches();
 }
 
 async function checkSession() {
@@ -1978,6 +2026,113 @@ function renderHeaderAuth() {
   } else {
     box.innerHTML = `<a href="/auth" style="background:var(--fb-blue);color:#fff;text-decoration:none;padding:6px 12px;border-radius:16px;font-weight:700;font-size:0.75rem;">Sign In</a>`;
   }
+}
+
+/* MEMBER PROFILE ENGINE */
+async function openProfile(username) {
+  const res = await fetch(`/api/users/${encodeURIComponent(username)}`);
+  const data = await res.json();
+  if(!data.success) return showToast(data.message, 'error');
+
+  const u = data.user;
+  const isSelf = currentUser && currentUser.id === u.id;
+  const coverBg = u.cover_url ? `style="background-image:url('${u.cover_url}')"` : '';
+
+  let walletBlock = '';
+  if(isSelf && (u.user_type === 'CPN Partner' || u.user_type === 'Admin')) {
+    walletBlock = `
+      <div class="card" style="background:linear-gradient(135deg, #0b1e36, #1e3a8a);color:#fff;">
+        <div style="font-size:0.85rem;">Wallet Balance: <b style="color:#f59e0b;font-size:1.1rem;">₦${u.wallet_balance.toLocaleString()}</b></div>
+        <div style="font-size:0.75rem;margin:4px 0;">Referral Code: <b>${u.referral_code}</b> | Recruits: <b>${u.recruits_count}</b></div>
+      </div>
+    `;
+  }
+
+  const postsHtml = u.posts.length ? u.posts.map(p => renderPostCard(p)).join('') : '<div class="card" style="text-align:center;">No wall updates yet.</div>';
+
+  document.getElementById('profile-wall-container').innerHTML = `
+    <div class="card">
+      <div class="fb-group-banner" ${coverBg}>
+        <div class="fb-group-avatar">${u.avatar_url ? `<img src="${u.avatar_url}" style="width:100%;height:100%;object-fit:cover;">` : u.full_name.charAt(0)}</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:10px;">
+        <div>
+          <h2 style="font-size:1.1rem;font-weight:800;">${u.full_name} <span style="font-size:0.65rem;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:6px;">${u.user_type}</span></h2>
+          <p style="font-size:0.75rem;color:var(--text-muted);">@${u.username} • <b>${u.followers_count}</b> Followers</p>
+        </div>
+      </div>
+      <p style="font-size:0.82rem;margin:8px 0;">💼 ${u.occupation || 'Member'} | 📱 ${u.phone || ''}</p>
+      <p style="font-size:0.82rem;color:var(--text-muted);">${u.bio || 'Resident of Ijebu'}</p>
+      <div style="display:flex;gap:6px;margin-top:10px;">
+        ${isSelf ? `<button onclick="openEditProfileModal()" class="btn-submit" style="font-size:0.78rem;">✏️ Edit Profile Details</button>` : `
+          <button onclick="toggleFollow('${u.username}')" class="btn-submit" style="font-size:0.78rem;">${u.is_following ? 'Unfollow' : 'Follow'}</button>
+        `}
+      </div>
+    </div>
+    ${walletBlock}
+    <h4 style="font-size:0.9rem;margin:12px 0 6px;">Profile Wall Updates</h4>
+    ${postsHtml}
+  `;
+  switchNav('profile');
+}
+
+function openEditProfileModal() {
+  if(!currentUser) return window.location.href = '/auth';
+  document.getElementById('edit-fullname').value = currentUser.full_name || '';
+  document.getElementById('edit-phone').value = currentUser.phone || '';
+  document.getElementById('edit-occupation').value = currentUser.occupation || '';
+  document.getElementById('edit-age').value = currentUser.age || 18;
+  document.getElementById('edit-gender').value = currentUser.gender || 'Male';
+  document.getElementById('edit-bio-text').value = currentUser.bio || '';
+  document.getElementById('edit-profile-modal').style.display = 'flex';
+}
+function closeEditProfileModal() { document.getElementById('edit-profile-modal').style.display = 'none'; }
+
+async function handleProfileUpdateSubmit(e) {
+  e.preventDefault();
+  const avatarInput = document.getElementById('edit-avatar-file');
+  const coverInput = document.getElementById('edit-cover-file');
+
+  let avatarUrl = '', coverUrl = '';
+  if(avatarInput && avatarInput.files[0]) avatarUrl = (await uploadSelectedFile(avatarInput)).url;
+  if(coverInput && coverInput.files[0]) coverUrl = (await uploadSelectedFile(coverInput)).url;
+
+  const res = await fetch('/api/users/profile/update', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      full_name: document.getElementById('edit-fullname').value,
+      phone: document.getElementById('edit-phone').value,
+      occupation: document.getElementById('edit-occupation').value,
+      age: document.getElementById('edit-age').value,
+      gender: document.getElementById('edit-gender').value,
+      bio: document.getElementById('edit-bio-text').value,
+      avatar_url: avatarUrl,
+      cover_url: coverUrl
+    })
+  });
+  const data = await res.json();
+  showToast(data.message);
+  if(data.success) {
+    closeEditProfileModal();
+    checkSession();
+    openProfile(currentUser.username);
+  }
+}
+
+function closeCPNModal() { document.getElementById('cpn-upgrade-modal').style.display = 'none'; }
+
+async function handleClaimBankTransfer(e) {
+  e.preventDefault();
+  const note = document.getElementById('cpn-ref-note').value;
+  const res = await fetch('/api/cpn/claim-bank-transfer', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({reference_note: note})
+  });
+  const data = await res.json();
+  showToast(data.message);
+  if(data.success) closeCPNModal();
 }
 
 /* GROUPS & FACEBOOK STYLE LOGIC */
@@ -2167,10 +2322,13 @@ async function handlePostSubmit(e, postType) {
     body: JSON.stringify({content, image_url: imageUrl, video_url: videoUrl, post_type: postType, group_id: 0})
   });
   const data = await res.json();
-  showToast(data.message);
   if(data.success) {
+    showToast(data.message);
     document.getElementById('post-content').value = '';
     loadPosts(postType, 'feed-posts-container');
+  } else {
+    showToast(data.message, 'error');
+    if(data.requires_upgrade) document.getElementById('cpn-upgrade-modal').style.display = 'flex';
   }
 }
 
@@ -2306,7 +2464,7 @@ body { background: #f0f2f5; color: #0f172a; display: flex; flex-direction: colum
 <body>
 <div class="auth-card">
   <div class="brand">IJEBU CONNECT</div>
-  <p style="font-size:0.78rem;color:#64748b;margin-bottom:12px;">Sign in to join groups and connect.</p>
+  <p style="font-size:0.78rem;color:#64748b;margin-bottom:12px;">Sign in to join groups, connect, and trade.</p>
   <form id="form-login" onsubmit="handleLogin(event)">
     <div class="form-group"><label>Username or Phone</label><input type="text" id="login-uname" class="form-control" required></div>
     <div class="form-group"><label>Password</label><input type="password" id="login-pword" class="form-control" required></div>
@@ -2362,26 +2520,30 @@ table { width:100%; border-collapse:collapse; background:#fff; border-radius:10p
 th, td { padding:8px 10px; text-align:left; border-bottom:1px solid #cbd5e1; }
 th { background:#0b1e36; color:#fff; }
 .btn-act { padding:4px 8px; border-radius:6px; border:none; color:#fff; font-weight:700; cursor:pointer; font-size:0.72rem; }
-.btn-del { background:#dc2626; }
+.btn-app { background:#059669; } .btn-rej { background:#ef4444; } .btn-del { background:#dc2626; }
 .app-footer { margin-top: 2rem; padding: 1rem 0; border-top: 1px solid #cbd5e1; text-align: center; font-size: 0.78rem; color: #64748b; }
 </style>
 </head>
 <body>
 
 <div class="admin-header">
-  <h2>⚙️ Admin Control Panel</h2>
+  <h2>⚙️ Rich Admin Control Panel</h2>
   <a href="/" style="color:#0b1e36;font-weight:700;text-decoration:none;font-size:0.85rem;">← Back to App</a>
 </div>
 
 <div class="grid">
   <div class="card"><div class="val" id="st-users">0</div><div class="lbl">Total Members</div></div>
+  <div class="card"><div class="val" id="st-partners">0</div><div class="lbl">CPN Partners</div></div>
   <div class="card"><div class="val" id="st-posts">0</div><div class="lbl">Total Posts</div></div>
   <div class="card"><div class="val" id="st-groups">0</div><div class="lbl">Community Groups</div></div>
+  <div class="card"><div class="val" id="st-wallets">₦0.00</div><div class="lbl">Member Balances</div></div>
 </div>
 
 <div class="admin-tabs">
   <button class="admin-tab active" onclick="switchAdminTab('posts')">Manage Posts & Content</button>
   <button class="admin-tab" onclick="switchAdminTab('members')">Manage Members</button>
+  <button class="admin-tab" onclick="switchAdminTab('partners')">CPN Claims</button>
+  <button class="admin-tab" onclick="switchAdminTab('payouts')">Bank Cashouts</button>
 </div>
 
 <!-- MANAGE POSTS TAB -->
@@ -2399,6 +2561,24 @@ th { background:#0b1e36; color:#fff; }
   <table>
     <thead><tr><th>Full Name</th><th>Username</th><th>Phone</th><th>Type</th><th>Action</th></tr></thead>
     <tbody id="members-body"></tbody>
+  </table>
+</div>
+
+<!-- CPN CLAIMS TAB -->
+<div id="adm-partners" class="tab-sec">
+  <h3>Pending CPN Partner Upgrades (₦2,000)</h3>
+  <table>
+    <thead><tr><th>Member</th><th>Amount</th><th>Reference Note</th><th>Action</th></tr></thead>
+    <tbody id="partner-reqs-body"></tbody>
+  </table>
+</div>
+
+<!-- BANK CASHOUTS TAB -->
+<div id="adm-payouts" class="tab-sec">
+  <h3>Member Cashout Requests</h3>
+  <table>
+    <thead><tr><th>User</th><th>Amount</th><th>Bank Details</th><th>Action</th></tr></thead>
+    <tbody id="payouts-body"></tbody>
   </table>
 </div>
 
@@ -2421,11 +2601,15 @@ async function loadAdminOverview() {
   if(!data.success) { alert('Admin access denied.'); window.location.href='/'; return; }
 
   document.getElementById('st-users').innerText = data.total_users;
+  document.getElementById('st-partners').innerText = data.total_partners;
   document.getElementById('st-posts').innerText = data.total_posts;
   document.getElementById('st-groups').innerText = data.total_groups;
+  document.getElementById('st-wallets').innerText = '₦' + data.total_partner_wallets.toLocaleString();
 
   loadAdminPosts();
   loadMembers();
+  loadPartnerRequests();
+  loadPayouts();
 }
 
 async function loadAdminPosts() {
@@ -2473,6 +2657,62 @@ async function deleteMember(uid) {
   if(!confirm('Remove this member completely?')) return;
   await fetch(`/api/admin/users?user_id=${uid}`, {method:'DELETE'});
   loadAdminOverview();
+}
+
+async function loadPartnerRequests() {
+  const res = await fetch('/api/admin/partner-requests');
+  const reqs = await res.json();
+  const body = document.getElementById('partner-reqs-body');
+  body.innerHTML = reqs.map(r => `
+    <tr>
+      <td><b>${r.full_name}</b> (@${r.username})</td>
+      <td>₦${r.amount.toLocaleString()}</td>
+      <td>${r.reference_note}</td>
+      <td>
+        ${r.status === 'pending' ? `
+          <button class="btn-act btn-app" onclick="actPartnerReq(${r.id}, 'approve')">Approve</button>
+          <button class="btn-act btn-rej" onclick="actPartnerReq(${r.id}, 'reject')">Reject</button>
+        ` : `<b>${r.status.toUpperCase()}</b>`}
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function actPartnerReq(id, action) {
+  await fetch('/api/admin/partner-requests', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({request_id: id, action: action})
+  });
+  loadAdminOverview();
+}
+
+async function loadPayouts() {
+  const res = await fetch('/api/admin/payouts');
+  const payouts = await res.json();
+  const body = document.getElementById('payouts-body');
+  body.innerHTML = payouts.map(p => `
+    <tr>
+      <td><b>${p.full_name}</b></td>
+      <td>₦${p.amount.toLocaleString()}</td>
+      <td>${p.bank_name} (${p.account_number})</td>
+      <td>
+        ${p.status === 'pending' ? `
+          <button class="btn-act btn-app" onclick="updatePayout(${p.id}, 'approved')">Approve</button>
+          <button class="btn-act btn-rej" onclick="updatePayout(${p.id}, 'rejected')">Reject</button>
+        ` : `<b>${p.status.toUpperCase()}</b>`}
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function updatePayout(id, status) {
+  await fetch('/api/admin/payouts', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({payout_id: id, status: status})
+  });
+  loadPayouts();
 }
 
 loadAdminOverview();
