@@ -4,6 +4,7 @@ import sqlite3
 import random
 import string
 import json
+import logging
 import requests
 from datetime import datetime
 
@@ -19,6 +20,15 @@ from flask import (
 )
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
+
+# ======================================================================
+# SYSTEM LOGGING SETUP
+# ======================================================================
+logging.basicConfig(
+    level=logging.INFO,
+    format='[%(asctime)s] [%(levelname)s] in %(module)s: %(message)s'
+)
+logger = logging.getLogger("ijebu_connect")
 
 # ======================================================================
 # CONFIGURATION
@@ -101,14 +111,17 @@ def add_notification(user_id, sender_id, notif_type, target_id, message):
         return
     if notif_type == 'message':
         return
-    db = get_db()
-    cursor = db.cursor()
-    p = query_param()
-    cursor.execute(f'''
-        INSERT INTO notifications (user_id, sender_id, type, target_id, message)
-        VALUES ({p}, {p}, {p}, {p}, {p})
-    ''', (user_id, sender_id, notif_type, target_id, message))
-    db.commit()
+    try:
+        db = get_db()
+        cursor = db.cursor()
+        p = query_param()
+        cursor.execute(f'''
+            INSERT INTO notifications (user_id, sender_id, type, target_id, message)
+            VALUES ({p}, {p}, {p}, {p}, {p})
+        ''', (user_id, sender_id, notif_type, target_id, message))
+        db.commit()
+    except Exception as e:
+        logger.error(f"Error adding notification: {e}")
 
 def count_user_listings(user_id):
     db = get_db()
@@ -122,6 +135,7 @@ def count_user_listings(user_id):
 
 # HARDCODED SEEDING TO PREVENT RENDER DATABASE RESET LOSSES
 def seed_hardcoded_data(cursor, db):
+    logger.info("Executing hardcoded seeding for Render environment protection...")
     p = query_param()
     admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect').lower()
     admin_password = os.environ.get('ADMIN_SEED_PASSWORD', 'Rotimi1972connect')
@@ -137,13 +151,15 @@ def seed_hardcoded_data(cursor, db):
     if not existing_admin:
         try:
             cursor.execute(f'''
-            INSERT INTO users (full_name, phone, username, password_hash, user_type, referral_code)
-            VALUES ({p}, {p}, {p}, {p}, 'Admin', {p})
+                INSERT INTO users (full_name, phone, username, password_hash, user_type, referral_code)
+                VALUES ({p}, {p}, {p}, {p}, 'Admin', {p})
             ''', (admin_name, admin_phone, admin_username, admin_pass_hash, admin_ref))
             db.commit()
             admin_id = cursor.lastrowid or 1
-        except Exception:
+            logger.info(f"Admin seed created with ID: {admin_id}")
+        except Exception as e:
             db.rollback()
+            logger.error(f"Error seeding admin user: {e}")
             admin_id = 1
     else:
         admin_id = existing_admin['id']
@@ -151,37 +167,39 @@ def seed_hardcoded_data(cursor, db):
             cursor.execute(f"UPDATE users SET password_hash = {p}, user_type = 'Admin' WHERE id = {p}",
                            (admin_pass_hash, admin_id))
             db.commit()
-        except Exception:
+        except Exception as e:
             db.rollback()
+            logger.error(f"Error updating admin seed: {e}")
 
     # Preload Official Pages
     cursor.execute("SELECT id FROM groups WHERE name LIKE '%Ijebu Imusin%'")
     if not cursor.fetchone():
         cursor.execute(f'''
-        INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
-        VALUES ({p}, 'Ijebu Imusin Youth Ambassadors Forum', 'Official platform for youth empowerment, leadership, community growth, and networking in Ijebu Imusin.', 'Community', '', '')
+            INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
+            VALUES ({p}, 'Ijebu Imusin Youth Ambassadors Forum', 'Official platform for youth empowerment, leadership, community growth, and networking in Ijebu Imusin.', 'Community', '', '')
         ''', (admin_id,))
         page1_id = cursor.lastrowid or 1
         cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (page1_id, admin_id))
         cursor.execute(f'''
-        INSERT INTO posts (user_id, group_id, content, post_type)
-        VALUES ({p}, {p}, 'Welcome to Ijebu Imusin Youth Ambassadors Forum! Join us to empower the youth and build our community.', 'Social')
+            INSERT INTO posts (user_id, group_id, content, post_type)
+            VALUES ({p}, {p}, 'Welcome to Ijebu Imusin Youth Ambassadors Forum! Join us to empower the youth and build our community.', 'Social')
         ''', (admin_id, page1_id))
 
     cursor.execute("SELECT id FROM groups WHERE name LIKE '%Willys Media World%'")
     if not cursor.fetchone():
         cursor.execute(f'''
-        INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
-        VALUES ({p}, 'Willys Media World - Learn Coding', 'Welcome to Willys Media World Tech Hub! Learn Web Development, Software Engineering, Python, Flask, and Digital Skills. Phone: 09018363715 | Email: willysmediaworld@gmail.com', 'Education', '', '')
+            INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
+            VALUES ({p}, 'Willys Media World - Learn Coding', 'Welcome to Willys Media World Tech Hub! Learn Web Development, Software Engineering, Python, Flask, and Digital Skills. Phone: 09018363715 | Email: willysmediaworld@gmail.com', 'Education', '', '')
         ''', (admin_id,))
         page2_id = cursor.lastrowid or 2
         cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (page2_id, admin_id))
         cursor.execute(f'''
-        INSERT INTO posts (user_id, group_id, content, post_type)
-        VALUES ({p}, {p}, '🚀 Welcome to Willys Media World Coding Academy! Start learning Full-Stack Web Development, Python, JavaScript, and HTML/CSS today. Contact us at 09018363715 or willysmediaworld@gmail.com for mentorship.', 'Social')
+            INSERT INTO posts (user_id, group_id, content, post_type)
+            VALUES ({p}, {p}, '🚀 Welcome to Willys Media World Coding Academy! Start learning Full-Stack Web Development, Python, JavaScript, and HTML/CSS today. Contact us at 09018363715 or willysmediaworld@gmail.com for mentorship.', 'Social')
         ''', (admin_id, page2_id))
 
     db.commit()
+    logger.info("Seeding completed successfully.")
 
 def init_db():
     with app.app_context():
@@ -190,27 +208,27 @@ def init_db():
         pk_type = "SERIAL PRIMARY KEY" if DATABASE_URL else "INTEGER PRIMARY KEY AUTOINCREMENT"
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS users (
-            id {pk_type},
-            full_name TEXT NOT NULL,
-            phone TEXT UNIQUE NOT NULL,
-            username TEXT UNIQUE NOT NULL,
-            password_hash TEXT NOT NULL,
-            user_type TEXT DEFAULT 'Resident',
-            referral_code TEXT UNIQUE NOT NULL,
-            referred_by TEXT DEFAULT NULL,
-            wallet_balance REAL DEFAULT 0.0,
-            is_verified_merchant INTEGER DEFAULT 0,
-            age INTEGER DEFAULT 18,
-            gender TEXT DEFAULT 'Unspecified',
-            relationship_intent TEXT DEFAULT 'Networking',
-            bio TEXT DEFAULT '',
-            occupation TEXT DEFAULT '',
-            avatar_url TEXT DEFAULT '',
-            cover_url TEXT DEFAULT '',
-            is_dating_active INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
+            CREATE TABLE IF NOT EXISTS users (
+                id {pk_type},
+                full_name TEXT NOT NULL,
+                phone TEXT UNIQUE NOT NULL,
+                username TEXT UNIQUE NOT NULL,
+                password_hash TEXT NOT NULL,
+                user_type TEXT DEFAULT 'Resident',
+                referral_code TEXT UNIQUE NOT NULL,
+                referred_by TEXT DEFAULT NULL,
+                wallet_balance REAL DEFAULT 0.0,
+                is_verified_merchant INTEGER DEFAULT 0,
+                age INTEGER DEFAULT 18,
+                gender TEXT DEFAULT 'Unspecified',
+                relationship_intent TEXT DEFAULT 'Networking',
+                bio TEXT DEFAULT '',
+                occupation TEXT DEFAULT '',
+                avatar_url TEXT DEFAULT '',
+                cover_url TEXT DEFAULT '',
+                is_dating_active INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
 
         safe_add_column(cursor, 'users', 'age', 'INTEGER DEFAULT 18')
         safe_add_column(cursor, 'users', 'gender', "TEXT DEFAULT 'Unspecified'")
@@ -222,182 +240,182 @@ def init_db():
         safe_add_column(cursor, 'users', 'is_dating_active', 'INTEGER DEFAULT 0')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS products (
-            id {pk_type},
-            user_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            category TEXT NOT NULL,
-            price REAL NOT NULL,
-            description TEXT,
-            image_url TEXT DEFAULT '',
-            video_url TEXT DEFAULT '',
-            location TEXT DEFAULT 'Ijebu Connect',
-            whatsapp_number TEXT NOT NULL,
-            listing_type TEXT DEFAULT 'Market',
-            status TEXT DEFAULT 'active',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
+            CREATE TABLE IF NOT EXISTS products (
+                id {pk_type},
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                category TEXT NOT NULL,
+                price REAL NOT NULL,
+                description TEXT,
+                image_url TEXT DEFAULT '',
+                video_url TEXT DEFAULT '',
+                location TEXT DEFAULT 'Ijebu Connect',
+                whatsapp_number TEXT NOT NULL,
+                listing_type TEXT DEFAULT 'Market',
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS posts (
-            id {pk_type},
-            user_id INTEGER NOT NULL,
-            group_id INTEGER DEFAULT 0,
-            content TEXT NOT NULL,
-            post_type TEXT DEFAULT 'Social',
-            image_url TEXT DEFAULT '',
-            video_url TEXT DEFAULT '',
-            likes_count INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
+            CREATE TABLE IF NOT EXISTS posts (
+                id {pk_type},
+                user_id INTEGER NOT NULL,
+                group_id INTEGER DEFAULT 0,
+                content TEXT NOT NULL,
+                post_type TEXT DEFAULT 'Social',
+                image_url TEXT DEFAULT '',
+                video_url TEXT DEFAULT '',
+                likes_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
         safe_add_column(cursor, 'posts', 'group_id', 'INTEGER DEFAULT 0')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS post_likes (
-            id {pk_type},
-            post_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(post_id, user_id)
-        )''')
+            CREATE TABLE IF NOT EXISTS post_likes (
+                id {pk_type},
+                post_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(post_id, user_id)
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS comments (
-            id {pk_type},
-            post_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            parent_id INTEGER DEFAULT 0,
-            content TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
+            CREATE TABLE IF NOT EXISTS comments (
+                id {pk_type},
+                post_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                parent_id INTEGER DEFAULT 0,
+                content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
         safe_add_column(cursor, 'comments', 'parent_id', 'INTEGER DEFAULT 0')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS comment_likes (
-            id {pk_type},
-            comment_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(comment_id, user_id)
-        )''')
+            CREATE TABLE IF NOT EXISTS comment_likes (
+                id {pk_type},
+                comment_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(comment_id, user_id)
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS followers (
-            id {pk_type},
-            follower_id INTEGER NOT NULL,
-            followed_id INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(follower_id, followed_id)
-        )''')
+            CREATE TABLE IF NOT EXISTS followers (
+                id {pk_type},
+                follower_id INTEGER NOT NULL,
+                followed_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(follower_id, followed_id)
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS groups (
-            id {pk_type},
-            user_id INTEGER NOT NULL,
-            name TEXT NOT NULL,
-            description TEXT DEFAULT '',
-            category TEXT DEFAULT 'Community',
-            avatar_url TEXT DEFAULT '',
-            cover_url TEXT DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
+            CREATE TABLE IF NOT EXISTS groups (
+                id {pk_type},
+                user_id INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                category TEXT DEFAULT 'Community',
+                avatar_url TEXT DEFAULT '',
+                cover_url TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
         safe_add_column(cursor, 'groups', 'cover_url', "TEXT DEFAULT ''")
         safe_add_column(cursor, 'groups', 'avatar_url', "TEXT DEFAULT ''")
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS group_members (
-            id {pk_type},
-            group_id INTEGER NOT NULL,
-            user_id INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(group_id, user_id)
-        )''')
+            CREATE TABLE IF NOT EXISTS group_members (
+                id {pk_type},
+                group_id INTEGER NOT NULL,
+                user_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(group_id, user_id)
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS events (
-            id {pk_type},
-            group_id INTEGER DEFAULT 0,
-            user_id INTEGER NOT NULL,
-            title TEXT NOT NULL,
-            description TEXT DEFAULT '',
-            event_date TEXT DEFAULT '',
-            location TEXT DEFAULT '',
-            image_url TEXT DEFAULT '',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
+            CREATE TABLE IF NOT EXISTS events (
+                id {pk_type},
+                group_id INTEGER DEFAULT 0,
+                user_id INTEGER NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                event_date TEXT DEFAULT '',
+                location TEXT DEFAULT '',
+                image_url TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS notifications (
-            id {pk_type},
-            user_id INTEGER NOT NULL,
-            sender_id INTEGER NOT NULL,
-            type TEXT NOT NULL,
-            target_id INTEGER DEFAULT 0,
-            message TEXT NOT NULL,
-            is_read INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
+            CREATE TABLE IF NOT EXISTS notifications (
+                id {pk_type},
+                user_id INTEGER NOT NULL,
+                sender_id INTEGER NOT NULL,
+                type TEXT NOT NULL,
+                target_id INTEGER DEFAULT 0,
+                message TEXT NOT NULL,
+                is_read INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS dating_winks (
-            id {pk_type},
-            sender_id INTEGER NOT NULL,
-            receiver_id INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(sender_id, receiver_id)
-        )''')
+            CREATE TABLE IF NOT EXISTS dating_winks (
+                id {pk_type},
+                sender_id INTEGER NOT NULL,
+                receiver_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(sender_id, receiver_id)
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS partner_requests (
-            id {pk_type},
-            user_id INTEGER NOT NULL,
-            amount REAL DEFAULT 2000.0,
-            payment_method TEXT DEFAULT 'Bank Transfer',
-            reference_note TEXT,
-            status TEXT DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
+            CREATE TABLE IF NOT EXISTS partner_requests (
+                id {pk_type},
+                user_id INTEGER NOT NULL,
+                amount REAL DEFAULT 2000.0,
+                payment_method TEXT DEFAULT 'Bank Transfer',
+                reference_note TEXT,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS transactions (
-            id {pk_type},
-            user_id INTEGER NOT NULL,
-            amount REAL NOT NULL,
-            tx_type TEXT NOT NULL,
-            description TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
+            CREATE TABLE IF NOT EXISTS transactions (
+                id {pk_type},
+                user_id INTEGER NOT NULL,
+                amount REAL NOT NULL,
+                tx_type TEXT NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS payout_requests (
-            id {pk_type},
-            user_id INTEGER NOT NULL,
-            amount REAL NOT NULL,
-            bank_name TEXT NOT NULL,
-            account_number TEXT NOT NULL,
-            account_name TEXT NOT NULL,
-            status TEXT DEFAULT 'pending',
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
+            CREATE TABLE IF NOT EXISTS payout_requests (
+                id {pk_type},
+                user_id INTEGER NOT NULL,
+                amount REAL NOT NULL,
+                bank_name TEXT NOT NULL,
+                account_number TEXT NOT NULL,
+                account_name TEXT NOT NULL,
+                status TEXT DEFAULT 'pending',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS messages (
-            id {pk_type},
-            sender_id INTEGER NOT NULL,
-            receiver_id INTEGER NOT NULL,
-            content TEXT NOT NULL,
-            is_read INTEGER DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )''')
+            CREATE TABLE IF NOT EXISTS messages (
+                id {pk_type},
+                sender_id INTEGER NOT NULL,
+                receiver_id INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                is_read INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )''')
 
         cursor.execute(f'''
-        CREATE TABLE IF NOT EXISTS blocked_users (
-            id {pk_type},
-            blocker_id INTEGER NOT NULL,
-            blocked_id INTEGER NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(blocker_id, blocked_id)
-        )''')
+            CREATE TABLE IF NOT EXISTS blocked_users (
+                id {pk_type},
+                blocker_id INTEGER NOT NULL,
+                blocked_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(blocker_id, blocked_id)
+            )''')
 
         # INDEX OPTIMIZATIONS FOR SPEED
         try:
@@ -411,8 +429,10 @@ def init_db():
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_comments_post ON comments (post_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_followers_pair ON followers (follower_id, followed_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender_id, receiver_id)")
-        except Exception:
-            pass
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages (receiver_id, is_read)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications (user_id, is_read)")
+        except Exception as e:
+            logger.warning(f"Index creation warning: {e}")
 
         seed_hardcoded_data(cursor, db)
 
@@ -438,6 +458,7 @@ def upload_media():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
         file_url = f"/static/uploads/{filename}"
+        logger.info(f"File uploaded successfully: {file_url}")
         return jsonify({'success': True, 'url': file_url, 'is_video': is_video})
     return jsonify({'success': False, 'message': 'Unsupported file format.'}), 400
 
@@ -522,6 +543,7 @@ def register():
         (full_name, phone, username, ph, new_ref, valid_ref)
     )
     db.commit()
+    logger.info(f"New user registered: username={username}, ref={new_ref}")
     return jsonify({'success': True, 'message': 'Account created successfully! You can now sign in.'})
 
 @app.route('/api/auth/login', methods=['POST'])
@@ -546,6 +568,7 @@ def login():
         cursor.execute(f"SELECT COUNT(*) FROM users WHERE referred_by = {p}", (user['referral_code'],))
         recruits = cursor.fetchone()[0]
 
+        logger.info(f"User logged in: {username}")
         return jsonify({
             'success': True,
             'message': f'Welcome back, {user["full_name"]}!',
@@ -566,6 +589,7 @@ def login():
                 'recruits_count': recruits
             }
         })
+    logger.warning(f"Failed login attempt for user: {username}")
     return jsonify({'success': False, 'message': 'Invalid credentials.'}), 401
 
 @app.route('/api/auth/me', methods=['GET'])
@@ -585,12 +609,19 @@ def get_current_user():
             d = dict(u)
             d['wallet_balance'] = float(d.get('wallet_balance') or 0)
             d['listings_count'] = count_user_listings(d['id'])
-            cursor.execute(f"SELECT COUNT(*) FROM users WHERE referred_by = {p}", (d['referral_code'],))
-            d['recruits_count'] = cursor.fetchone()[0]
-            cursor.execute(f"SELECT COUNT(*) FROM notifications WHERE user_id = {p} AND is_read = 0", (d['id'],))
-            d['unread_notifs'] = cursor.fetchone()[0]
-            cursor.execute(f"SELECT COUNT(*) FROM messages WHERE receiver_id = {p} AND is_read = 0", (d['id'],))
-            d['unread_chats'] = cursor.fetchone()[0]
+
+            # OPTIMIZED SINGLE-PASS METRICS QUERY FOR FASTER SPEED
+            cursor.execute(f'''
+                SELECT 
+                    (SELECT COUNT(*) FROM users WHERE referred_by = {p}) AS recruits_count,
+                    (SELECT COUNT(*) FROM notifications WHERE user_id = {p} AND is_read = 0) AS unread_notifs,
+                    (SELECT COUNT(*) FROM messages WHERE receiver_id = {p} AND is_read = 0) AS unread_chats
+            ''', (d['referral_code'], d['id'], d['id']))
+            counts = cursor.fetchone()
+            d['recruits_count'] = counts[0]
+            d['unread_notifs'] = counts[1]
+            d['unread_chats'] = counts[2]
+
             return jsonify({'logged_in': True, 'user': d})
     return jsonify({'logged_in': False})
 
@@ -720,7 +751,6 @@ def get_page_detail(page_id):
     page = cursor.fetchone()
     if not page:
         return jsonify({'success': False, 'message': 'Page not found.'}), 404
-
     res = dict(page)
     res['is_creator'] = (uid == page['user_id'])
     return jsonify({'success': True, 'page': res})
@@ -814,7 +844,6 @@ def handle_events():
             VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p})
         ''', (group_id, session['user_id'], title, description, event_date, location, image_url))
         db.commit()
-
         return jsonify({'success': True, 'message': 'Event created successfully!'})
 
     group_id = int(request.args.get('group_id') or 0)
@@ -850,6 +879,7 @@ def claim_bank_transfer():
     cursor.execute(f"INSERT INTO partner_requests (user_id, amount, reference_note) VALUES ({p}, 2000.0, {p})",
                    (session['user_id'], note))
     db.commit()
+    logger.info(f"Payment claim submitted by user_id {session['user_id']}")
     return jsonify({'success': True, 'message': 'Payment claim submitted! Admin will verify and activate your CPN Partner status.'})
 
 @app.route('/api/cpn/withdraw', methods=['POST'])
@@ -884,6 +914,7 @@ def request_payout():
     cursor.execute(f'''INSERT INTO transactions (user_id, amount, tx_type, description)
     VALUES ({p}, {p}, 'Bank Cashout Request', {p})''', (uid, amount, f"Cashout to {bank_name} ({account_number})"))
     db.commit()
+    logger.info(f"Payout requested by user {uid} for amount {amount}")
     return jsonify({'success': True, 'message': 'Cashout request submitted!'})
 
 # ======================================================================
@@ -932,15 +963,14 @@ def handle_products():
 
         cursor.execute(f'''INSERT INTO products (user_id, title, category, price, description, whatsapp_number, image_url, video_url, listing_type)
         VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})''',
-                       (uid, title, category, price, description, whatsapp, image_url, video_url, listing_type))
+        (uid, title, category, price, description, whatsapp, image_url, video_url, listing_type))
         db.commit()
         return jsonify({'success': True, 'message': f'Listing published on Ijebu {listing_type} Hub!'})
 
     q = request.args.get('q', '').strip().lower()
     listing_type = request.args.get('type', 'Market').strip()
     sql = f'''
-        SELECT p.*, u.full_name AS seller_name, u.username AS seller_username,
-        u.is_verified_merchant, u.user_type
+        SELECT p.*, u.full_name AS seller_name, u.username AS seller_username, u.is_verified_merchant, u.user_type
         FROM products p JOIN users u ON p.user_id = u.id
         WHERE p.status = 'active' AND p.listing_type = {p}
     '''
@@ -1087,7 +1117,6 @@ def handle_posts():
             WHERE p.post_type = {p}
             ORDER BY p.id DESC LIMIT 60
         ''', (current_uid, post_type_filter))
-
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 @app.route('/api/posts/<int:post_id>/like', methods=['POST'])
@@ -1197,7 +1226,6 @@ def get_user_profile(username):
         FROM users WHERE LOWER(username) = {p}
     ''', (username.lower(),))
     user = cursor.fetchone()
-
     if not user:
         return jsonify({'success': False, 'message': 'User not found.'}), 404
 
@@ -1282,11 +1310,8 @@ def chat_partners():
     ''', (uid, uid, uid, uid))
 
     partners = []
-    chatted_ids = set()
-
     for row in cursor.fetchall():
         other_id = row['other_id']
-        chatted_ids.add(other_id)
         last_id = row['last_id']
 
         cursor.execute(f"SELECT id, full_name, username, user_type, avatar_url FROM users WHERE id = {p}", (other_id,))
@@ -1323,7 +1348,6 @@ def chat_thread(username):
     other = cursor.fetchone()
     if not other:
         return jsonify({'success': False, 'message': 'User not found.'}), 404
-
     other_id = other['id']
 
     if request.method == 'POST':
@@ -1534,7 +1558,6 @@ INDEX_TEMPLATE = r"""
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-
 <title>{{ meta_title }}</title>
 <meta name="description" content="{{ meta_desc }}">
 
@@ -1548,7 +1571,6 @@ INDEX_TEMPLATE = r"""
 
 <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-
 <style>
 :root {
   --fb-blue: #1877f2;
@@ -1604,13 +1626,11 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 .feed-post { background: #fff; border: 1px solid var(--border-light); border-radius: 12px; padding: 0.88rem; margin-bottom: 0.85rem; }
 .post-header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
 .avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; flex-shrink: 0; background-size: cover; background-position: center; }
-
 .post-actions { display: flex; gap: 6px; padding-top: 8px; margin-top: 8px; border-top: 1px solid var(--border-light); }
 .post-action-btn { flex: 1; background: none; border: none; padding: 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; }
 .post-action-btn:hover { background: #f0f2f5; }
 
 .group-badge { background: #e7f3ff; color: var(--fb-blue); font-size: 0.72rem; font-weight: 800; padding: 2px 8px; border-radius: 10px; margin-left: auto; cursor: pointer; }
-
 .comments-box { background: #f8fafc; border-radius: 8px; padding: 8px; margin-top: 8px; }
 .comment-item { border-bottom: 1px solid #e2e8f0; padding: 6px 0; font-size: 0.82rem; }
 .comment-reply-item { margin-left: 18px; padding-left: 8px; border-left: 2px solid var(--fb-blue); }
@@ -1625,7 +1645,6 @@ header { background: #fff; padding: 0.75rem 1rem; display: flex; justify-content
 .app-footer { background: #fff; border-top: 1px solid var(--border-light); padding: 1.2rem; text-align: center; font-size: 0.78rem; color: var(--text-muted); margin-top: 2rem; }
 .app-footer a { color: var(--fb-blue); text-decoration: none; font-weight: 700; }
 </style>
-
 <script>
 window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 </script>
@@ -1650,7 +1669,6 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 </div>
 
 <div class="app-container">
-
   <!-- MAIN FEED -->
   <div id="view-feed" class="view-section active">
     <div class="card">
@@ -1677,9 +1695,8 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
   <!-- PAGE DETAIL VIEW -->
   <div id="view-page-detail" class="view-section">
     <button onclick="switchNav('pages')" style="background:#fff;border:1px solid var(--border-light);padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;margin-bottom:8px;">← Back to Pages</button>
-
     <div id="page-detail-header" class="card"></div>
-
+    
     <div class="card" id="page-post-composer" style="display:none;">
       <h4 style="font-size:0.88rem; font-weight:800; margin-bottom:6px;">Post to Page (Shows on Main Feed too)</h4>
       <form onsubmit="handlePagePostSubmit(event)">
@@ -1691,7 +1708,7 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
         <button type="submit" class="btn-submit">Publish Page Post</button>
       </form>
     </div>
-
+    
     <div id="page-posts-container"></div>
   </div>
 
@@ -1767,7 +1784,6 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
     <button onclick="switchNav('feed')" style="background:#fff;border:1px solid var(--border-light);padding:4px 10px;border-radius:8px;font-weight:700;font-size:0.75rem;margin-bottom:8px;">← Back</button>
     <div id="profile-wall-container"></div>
   </div>
-
 </div>
 
 <!-- MULTI-PURPOSE SELL / LISTING MODAL -->
@@ -1950,6 +1966,7 @@ async function checkSession() {
     } else {
       currentUser = null;
       renderHeaderAuth();
+      window.location.href = '/auth'; // ALWAYS LOAD AUTH FIRST IF NOT LOGGED IN
     }
   } catch(e){}
 }
@@ -1963,13 +1980,13 @@ function renderHeaderAuth() {
   }
 }
 
-/* LISTING MODAL LOGIC FOR MARKET, BEAUTY, JOBS */
 function startSellItem(type = 'Market') {
   if(!currentUser) return window.location.href = '/auth';
   document.getElementById('prod-type').value = type;
   document.getElementById('modal-sell-title').innerText = type === 'Market' ? 'Publish Marketplace Item' : (type === 'Beauty' ? 'Add Beauty & Fashion Service' : 'Post Job / Skill Listing');
   document.getElementById('sell-modal').style.display = 'flex';
 }
+
 function closeSellModal() { document.getElementById('sell-modal').style.display = 'none'; }
 
 async function handleProductSubmit(e) {
@@ -1977,7 +1994,6 @@ async function handleProductSubmit(e) {
   const type = document.getElementById('prod-type').value;
   const fileInput = document.getElementById('prod-img-file');
   let uploadedImg = '', uploadedVid = '';
-
   if(fileInput && fileInput.files[0]) {
     const upload = await uploadSelectedFile(fileInput);
     if(upload.is_video) uploadedVid = upload.url;
@@ -2016,7 +2032,6 @@ async function loadCategoryListings(type, containerId) {
   const items = await res.json();
   const c = document.getElementById(containerId);
   if(!items.length) { c.innerHTML = '<div style="text-align:center;padding:1rem;">No listings found.</div>'; return; }
-
   c.innerHTML = items.map(p => `
     <div style="border-bottom:1px solid var(--border-light);padding-bottom:10px;margin-bottom:10px;display:flex;gap:10px;align-items:center;">
       ${p.image_url ? `<img src="${p.image_url}" style="width:70px;height:70px;border-radius:8px;object-fit:cover;">` : `<div style="width:70px;height:70px;background:#f0f2f5;border-radius:8px;display:flex;align-items:center;justify-content:center;"><i class="fa-solid fa-store"></i></div>`}
@@ -2030,7 +2045,6 @@ async function loadCategoryListings(type, containerId) {
   `).join('');
 }
 
-/* EVENT MODAL LOGIC */
 function openCreateEventModal() { document.getElementById('event-create-modal').style.display = 'flex'; }
 function closeEventModal() { document.getElementById('event-create-modal').style.display = 'none'; }
 
@@ -2065,7 +2079,6 @@ async function loadEventsFeed() {
   const events = await res.json();
   const c = document.getElementById('events-feed-container');
   if(!events.length) { c.innerHTML = '<div class="card">No events listed right now.</div>'; return; }
-
   c.innerHTML = events.map(e => `
     <div class="card">
       ${e.image_url ? `<img src="${e.image_url}" style="width:100%;border-radius:8px;max-height:180px;object-fit:cover;margin-bottom:8px;">` : ''}
@@ -2076,7 +2089,6 @@ async function loadEventsFeed() {
   `).join('');
 }
 
-/* DATING LOGIC */
 function openDatingSettingsModal() {
   if(!currentUser) return window.location.href = '/auth';
   document.getElementById('dating-modal').style.display = 'flex';
@@ -2107,7 +2119,6 @@ async function loadDatingMatches() {
   const matches = await res.json();
   const container = document.getElementById('dating-matches-container');
   if(!matches.length) { container.innerHTML = '<div class="card">No active singles on feed yet.</div>'; return; }
-
   container.innerHTML = matches.map(m => `
     <div class="card" style="display:flex;gap:10px;align-items:center;">
       <div class="avatar" style="width:48px;height:48px;background:var(--fb-blue);">${m.avatar_url ? `<img src="${m.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : m.full_name.charAt(0)}</div>
@@ -2132,16 +2143,14 @@ async function sendWink(receiverId) {
   showToast(data.message);
 }
 
-/* MEMBER PROFILE ENGINE */
 async function openProfile(username) {
   const res = await fetch(`/api/users/${encodeURIComponent(username)}`);
   const data = await res.json();
   if(!data.success) return showToast(data.message, 'error');
-
   const u = data.user;
   const isSelf = currentUser && currentUser.id === u.id;
   const coverBg = u.cover_url ? `style="background-image:url('${u.cover_url}')"` : '';
-
+  
   let walletBlock = '';
   if(isSelf && (u.user_type === 'CPN Partner' || u.user_type === 'Admin')) {
     walletBlock = `
@@ -2151,7 +2160,6 @@ async function openProfile(username) {
       </div>
     `;
   }
-
   const postsHtml = u.posts.length ? u.posts.map(p => renderPostCard(p)).join('') : '<div class="card" style="text-align:center;">No wall updates yet.</div>';
 
   document.getElementById('profile-wall-container').innerHTML = `
@@ -2190,14 +2198,15 @@ function openEditProfileModal() {
   document.getElementById('edit-bio-text').value = currentUser.bio || '';
   document.getElementById('edit-profile-modal').style.display = 'flex';
 }
+
 function closeEditProfileModal() { document.getElementById('edit-profile-modal').style.display = 'none'; }
 
 async function handleProfileUpdateSubmit(e) {
   e.preventDefault();
   const avatarInput = document.getElementById('edit-avatar-file');
   const coverInput = document.getElementById('edit-cover-file');
-
   let avatarUrl = '', coverUrl = '';
+
   if(avatarInput && avatarInput.files[0]) avatarUrl = (await uploadSelectedFile(avatarInput)).url;
   if(coverInput && coverInput.files[0]) coverUrl = (await uploadSelectedFile(coverInput)).url;
 
@@ -2239,13 +2248,11 @@ async function handleClaimBankTransfer(e) {
   if(data.success) closeCPNModal();
 }
 
-/* PAGES LOGIC */
 async function loadPages() {
   const res = await fetch('/api/pages');
   const pages = await res.json();
   const c = document.getElementById('pages-container');
   if(!pages.length) { c.innerHTML = '<div class="card">No pages created yet. Click "+ Create Page" to start one!</div>'; return; }
-
   c.innerHTML = pages.map(g => `
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
       <div style="display:flex;align-items:center;gap:12px;cursor:pointer;" onclick="openPageDetail(${g.id})">
@@ -2266,10 +2273,9 @@ async function openPageDetail(pageId) {
   const res = await fetch(`/api/pages/${pageId}`);
   const data = await res.json();
   if(!data.success) return showToast(data.message, 'error');
-
   const g = data.page;
-  document.getElementById('active-page-id').value = g.id;
 
+  document.getElementById('active-page-id').value = g.id;
   const coverBg = g.cover_url ? `style="background-image:url('${g.cover_url}')"` : '';
   const avatarHtml = g.avatar_url ? `<img src="${g.avatar_url}" style="width:100%;height:100%;object-fit:cover;">` : `<i class="fa-solid fa-flag"></i>`;
 
@@ -2297,7 +2303,6 @@ async function openPageDetail(pageId) {
   } else {
     document.getElementById('page-post-composer').style.display = 'none';
   }
-
   loadPosts('Social', 'page-posts-container', g.id);
 }
 
@@ -2334,8 +2339,8 @@ async function handlePageSubmit(e) {
   const desc = document.getElementById('page-desc').value.trim();
   const avatarInput = document.getElementById('page-avatar-file');
   const coverInput = document.getElementById('page-cover-file');
-
   let avatarUrl = '', coverUrl = '';
+
   if(avatarInput && avatarInput.files[0]) avatarUrl = (await uploadSelectedFile(avatarInput)).url;
   if(coverInput && coverInput.files[0]) coverUrl = (await uploadSelectedFile(coverInput)).url;
 
@@ -2364,7 +2369,6 @@ async function joinPage(pageId) {
   openPageDetail(pageId);
 }
 
-/* POSTS & COMMENT REPLIES ENGINE */
 async function loadPosts(postType, containerId, groupId = 0) {
   const res = await fetch(`/api/posts?type=${postType}&group_id=${groupId}`);
   const posts = await res.json();
@@ -2409,6 +2413,7 @@ function renderPostCard(p) {
 async function handlePostSubmit(e, postType) {
   if(e) e.preventDefault();
   if(!currentUser) return window.location.href = '/auth';
+
   const content = document.getElementById('post-content').value.trim();
   if(!content) return showToast('Please enter post text', 'error');
 
@@ -2438,6 +2443,7 @@ async function handlePostSubmit(e, postType) {
 async function handlePagePostSubmit(e) {
   e.preventDefault();
   if(!currentUser) return window.location.href = '/auth';
+
   const pageId = parseInt(document.getElementById('active-page-id').value);
   const content = document.getElementById('page-post-content').value.trim();
   if(!content) return showToast('Please enter post text', 'error');
@@ -2535,9 +2541,12 @@ function sharePost(postId) {
   }
 }
 
-window.onload = function() {
-  checkSession();
-  loadPosts('Social', 'feed-posts-container');
+// FAST EXECUTION: LOAD AUTH FIRST THEN HYDRATE FEED
+window.onload = async function() {
+  await checkSession();
+  if(currentUser) {
+    loadPosts('Social', 'feed-posts-container');
+  }
 };
 </script>
 </body>
@@ -2628,7 +2637,6 @@ th { background:#0b1e36; color:#fff; }
 </style>
 </head>
 <body>
-
 <div class="admin-header">
   <h2>⚙️ Rich Admin Control Panel</h2>
   <a href="/" style="color:#0b1e36;font-weight:700;text-decoration:none;font-size:0.85rem;">← Back to App</a>
@@ -2720,7 +2728,6 @@ async function loadAdminPosts() {
   const posts = await res.json();
   const body = document.getElementById('posts-body');
   if(!posts.length) { body.innerHTML = '<tr><td colspan="4">No posts found.</td></tr>'; return; }
-
   body.innerHTML = posts.map(p => `
     <tr>
       <td><b>${p.full_name}</b><br><small>@${p.username}</small></td>
@@ -2804,7 +2811,7 @@ async function loadPayouts() {
         ${p.status === 'pending' ? `
           <button class="btn-act btn-app" onclick="updatePayout(${p.id}, 'approved')">Approve</button>
           <button class="btn-act btn-rej" onclick="updatePayout(${p.id}, 'rejected')">Reject</button>
-        ` : `<b>${p.status.toUpperCase()}</b>`}
+        ` : `<b>${r.status.toUpperCase()}</b>`}
       </td>
     </tr>
   `).join('');
@@ -2830,7 +2837,10 @@ loadAdminOverview();
 # ======================================================================
 @app.route('/')
 def index():
-    db = get_db()
+    if 'user_id' not in session:
+        logger.info("Unauthenticated user accessing index. Redirecting to /auth")
+        return redirect(url_for('auth_page'))
+
     host_url = request.host_url
     if not host_url.startswith('https://') and 'localhost' not in host_url and '127.0.0.1' not in host_url:
         host_url = host_url.replace('http://', 'https://')
@@ -2859,7 +2869,13 @@ def auth_page():
 def admin_page():
     return render_template_string(ADMIN_TEMPLATE, contact_email=CONTACT_EMAIL, company_name=COMPANY_NAME)
 
+# GLOBAL ERROR HANDLER FOR SYSTEM RELIABILITY
+@app.errorhandler(500)
+def internal_server_error(e):
+    logger.error(f"Internal Server Error: {e}")
+    return jsonify({'success': False, 'message': 'A system error occurred. Please try again later.'}), 500
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    logger.info(f"Starting Ijebu Connect application on port {port}...")
     app.run(host='0.0.0.0', port=port, debug=True)
-    
