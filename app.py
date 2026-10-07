@@ -39,7 +39,6 @@ ALLOW_TEST_PAYMENTS = os.environ.get('ALLOW_TEST_PAYMENTS', 'True').lower() == '
 CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', 'willysmediaworld@gmail.com')
 CONTACT_PHONE = "09018363715"
 COMPANY_NAME = "Willys Media World"
-
 BANK_INFO = {
     "bank_name": "OPay",
     "account_number": "09018363715",
@@ -69,12 +68,12 @@ def get_system_logos():
     static_dir = os.path.join(app.root_path, 'static')
     valid_exts = ('.png', '.jpg', '.jpeg', '.webp', '.svg', '.gif')
     found_files = []
-
+    
     if os.path.exists(static_dir):
         for f in sorted(os.listdir(static_dir)):
             if f.lower().endswith(valid_exts) and not f.startswith('.'):
                 found_files.append(f"/static/{f}")
-
+                
     if os.path.exists(UPLOAD_FOLDER):
         for f in sorted(os.listdir(UPLOAD_FOLDER)):
             if f.lower().endswith(valid_exts) and not f.startswith('.'):
@@ -129,8 +128,6 @@ def safe_add_column(cursor, table, column, col_type):
 
 def add_notification(user_id, sender_id, notif_type, target_id, message):
     if user_id == sender_id or not user_id:
-        return
-    if notif_type == 'message':
         return
     try:
         db = get_db()
@@ -267,7 +264,8 @@ def init_db():
                 cover_url TEXT DEFAULT '',
                 is_dating_active INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )
+        ''')
 
         safe_add_column(cursor, 'users', 'age', 'INTEGER DEFAULT 18')
         safe_add_column(cursor, 'users', 'gender', "TEXT DEFAULT 'Unspecified'")
@@ -293,7 +291,8 @@ def init_db():
                 listing_type TEXT DEFAULT 'Market',
                 status TEXT DEFAULT 'active',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS posts (
@@ -306,7 +305,8 @@ def init_db():
                 video_url TEXT DEFAULT '',
                 likes_count INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )
+        ''')
         safe_add_column(cursor, 'posts', 'group_id', 'INTEGER DEFAULT 0')
 
         cursor.execute(f'''
@@ -316,7 +316,8 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(post_id, user_id)
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS comments (
@@ -326,7 +327,8 @@ def init_db():
                 parent_id INTEGER DEFAULT 0,
                 content TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )
+        ''')
         safe_add_column(cursor, 'comments', 'parent_id', 'INTEGER DEFAULT 0')
 
         cursor.execute(f'''
@@ -336,7 +338,8 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(comment_id, user_id)
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS followers (
@@ -345,7 +348,8 @@ def init_db():
                 followed_id INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(follower_id, followed_id)
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS groups (
@@ -357,7 +361,8 @@ def init_db():
                 avatar_url TEXT DEFAULT '',
                 cover_url TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )
+        ''')
         safe_add_column(cursor, 'groups', 'cover_url', "TEXT DEFAULT ''")
         safe_add_column(cursor, 'groups', 'avatar_url', "TEXT DEFAULT ''")
 
@@ -368,7 +373,8 @@ def init_db():
                 user_id INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(group_id, user_id)
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS events (
@@ -381,7 +387,8 @@ def init_db():
                 location TEXT DEFAULT '',
                 image_url TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS notifications (
@@ -393,7 +400,8 @@ def init_db():
                 message TEXT NOT NULL,
                 is_read INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS dating_winks (
@@ -402,7 +410,8 @@ def init_db():
                 receiver_id INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(sender_id, receiver_id)
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS partner_requests (
@@ -413,7 +422,8 @@ def init_db():
                 reference_note TEXT,
                 status TEXT DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS transactions (
@@ -423,7 +433,8 @@ def init_db():
                 tx_type TEXT NOT NULL,
                 description TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS payout_requests (
@@ -435,7 +446,8 @@ def init_db():
                 account_name TEXT NOT NULL,
                 status TEXT DEFAULT 'pending',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS messages (
@@ -445,7 +457,8 @@ def init_db():
                 content TEXT NOT NULL,
                 is_read INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )''')
+            )
+        ''')
 
         cursor.execute(f'''
             CREATE TABLE IF NOT EXISTS blocked_users (
@@ -454,7 +467,8 @@ def init_db():
                 blocked_id INTEGER NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(blocker_id, blocked_id)
-            )''')
+            )
+        ''')
 
         # INDEX OPTIMIZATIONS FOR SPEED
         try:
@@ -509,7 +523,6 @@ def global_search():
     q = request.args.get('q', '').strip().lower()
     if not q:
         return jsonify({'success': True, 'users': [], 'pages': []})
-
     db = get_db()
     cursor = db.cursor()
     p = query_param()
@@ -517,7 +530,7 @@ def global_search():
     # Search Users
     cursor.execute(f'''
         SELECT id, full_name, username, user_type, avatar_url, occupation
-        FROM users 
+        FROM users
         WHERE LOWER(full_name) LIKE {p} OR LOWER(username) LIKE {p} OR LOWER(occupation) LIKE {p}
         ORDER BY id DESC LIMIT 15
     ''', (f"%{q}%", f"%{q}%", f"%{q}%"))
@@ -534,6 +547,44 @@ def global_search():
     pages = [dict(r) for r in cursor.fetchall()]
 
     return jsonify({'success': True, 'users': users, 'pages': pages})
+
+# ======================================================================
+# NOTIFICATIONS API (FACEBOOK STYLE)
+# ======================================================================
+@app.route('/api/notifications', methods=['GET'])
+def get_notifications():
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'notifications': [], 'unread_count': 0}), 401
+    uid = session['user_id']
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    cursor.execute(f'''
+        SELECT n.*, u.full_name AS sender_name, u.username AS sender_username, u.avatar_url AS sender_avatar
+        FROM notifications n
+        LEFT JOIN users u ON n.sender_id = u.id
+        WHERE n.user_id = {p}
+        ORDER BY n.id DESC LIMIT 30
+    ''', (uid,))
+    notifs = [dict(r) for r in cursor.fetchall()]
+
+    cursor.execute(f"SELECT COUNT(*) FROM notifications WHERE user_id = {p} AND is_read = 0", (uid,))
+    unread_count = cursor.fetchone()[0]
+
+    return jsonify({'success': True, 'notifications': notifs, 'unread_count': unread_count})
+
+@app.route('/api/notifications/read', methods=['POST'])
+def mark_notifications_read():
+    if 'user_id' not in session:
+        return jsonify({'success': False}), 401
+    uid = session['user_id']
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    cursor.execute(f"UPDATE notifications SET is_read = 1 WHERE user_id = {p}", (uid,))
+    db.commit()
+    return jsonify({'success': True})
 
 # ======================================================================
 # CPN COMMISSION ENGINE
@@ -597,6 +648,7 @@ def register():
     db = get_db()
     cursor = db.cursor()
     p = query_param()
+
     cursor.execute(f"SELECT id FROM users WHERE username = {p} OR phone = {p}", (username, phone))
     if cursor.fetchone():
         return jsonify({'success': False, 'message': 'Username or Phone already registered.'}), 400
@@ -610,9 +662,10 @@ def register():
 
     new_ref = generate_ref_code()
     ph = generate_password_hash(password)
+
     cursor.execute(
         f'''INSERT INTO users (full_name, phone, username, password_hash, referral_code, referred_by)
-        VALUES ({p}, {p}, {p}, {p}, {p}, {p})''',
+           VALUES ({p}, {p}, {p}, {p}, {p}, {p})''',
         (full_name, phone, username, ph, new_ref, valid_ref)
     )
     db.commit()
@@ -628,6 +681,7 @@ def login():
     db = get_db()
     cursor = db.cursor()
     p = query_param()
+
     cursor.execute(f"SELECT * FROM users WHERE username = {p} OR phone = {p}", (username, username))
     user = cursor.fetchone()
 
@@ -662,6 +716,7 @@ def login():
                 'recruits_count': recruits
             }
         })
+
     logger.warning(f"Failed login attempt for user: {username}")
     return jsonify({'success': False, 'message': 'Invalid credentials.'}), 401
 
@@ -673,8 +728,9 @@ def get_current_user():
         p = query_param()
         cursor.execute(
             f'''SELECT id, full_name, phone, username, user_type, referral_code, wallet_balance,
-            is_verified_merchant, age, gender, relationship_intent, bio, occupation, avatar_url, cover_url, is_dating_active
-            FROM users WHERE id = {p}''',
+                       is_verified_merchant, age, gender, relationship_intent, bio, occupation, avatar_url,
+                       cover_url, is_dating_active
+                FROM users WHERE id = {p}''',
             (session['user_id'],)
         )
         u = cursor.fetchone()
@@ -685,9 +741,9 @@ def get_current_user():
 
             cursor.execute(f'''
                 SELECT 
-                    (SELECT COUNT(*) FROM users WHERE referred_by = {p}) AS recruits_count,
-                    (SELECT COUNT(*) FROM notifications WHERE user_id = {p} AND is_read = 0) AS unread_notifs,
-                    (SELECT COUNT(*) FROM messages WHERE receiver_id = {p} AND is_read = 0) AS unread_chats
+                  (SELECT COUNT(*) FROM users WHERE referred_by = {p}) AS recruits_count,
+                  (SELECT COUNT(*) FROM notifications WHERE user_id = {p} AND is_read = 0) AS unread_notifs,
+                  (SELECT COUNT(*) FROM messages WHERE receiver_id = {p} AND is_read = 0) AS unread_chats
             ''', (d['referral_code'], d['id'], d['id']))
             counts = cursor.fetchone()
             d['recruits_count'] = counts[0]
@@ -793,13 +849,14 @@ def handle_pages():
             return jsonify({'success': False, 'message': 'Page name required.'}), 400
 
         cursor.execute(f'''INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
-        VALUES ({p}, {p}, {p}, 'Community', {p}, {p})''', (session['user_id'], name, desc, avatar, cover))
+                          VALUES ({p}, {p}, {p}, 'Community', {p}, {p})''',
+                       (session['user_id'], name, desc, avatar, cover))
         page_id = cursor.lastrowid or 0
         cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (page_id, session['user_id']))
         db.commit()
         return jsonify({'success': True, 'message': f'Page "{name}" created successfully!'})
 
-    cursor.execute(f'''
+    cursor.execute('''
         SELECT g.*, COUNT(gm.id) AS member_count
         FROM groups g LEFT JOIN group_members gm ON g.id = gm.group_id
         GROUP BY g.id ORDER BY g.id DESC
@@ -815,8 +872,8 @@ def get_page_detail(page_id):
 
     cursor.execute(f'''
         SELECT g.*, u.full_name AS creator_name, u.username AS creator_username,
-        (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) AS member_count,
-        CASE WHEN EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = g.id AND gm.user_id = {p}) THEN 1 ELSE 0 END AS is_member
+               (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) AS member_count,
+               CASE WHEN EXISTS (SELECT 1 FROM group_members gm WHERE gm.group_id = g.id AND gm.user_id = {p}) THEN 1 ELSE 0 END AS is_member
         FROM groups g
         JOIN users u ON g.user_id = u.id
         WHERE g.id = {p}
@@ -850,6 +907,7 @@ def update_page(page_id):
 
     updates = []
     params = []
+
     if name:
         updates.append(f"name = {p}")
         params.append(name)
@@ -943,12 +1001,14 @@ def claim_bank_transfer():
         return jsonify({'success': False, 'message': 'Login required.'}), 401
     data = request.json or {}
     note = data.get('reference_note', '').strip()
+
     if not note:
         return jsonify({'success': False, 'message': 'Please enter transfer reference note.'}), 400
 
     db = get_db()
     cursor = db.cursor()
     p = query_param()
+
     cursor.execute(f"INSERT INTO partner_requests (user_id, amount, reference_note) VALUES ({p}, 2000.0, {p})",
                    (session['user_id'], note))
     db.commit()
@@ -983,9 +1043,9 @@ def request_payout():
         return jsonify({'success': False, 'message': 'Insufficient wallet balance.'}), 400
 
     cursor.execute(f'''INSERT INTO payout_requests (user_id, amount, bank_name, account_number, account_name)
-    VALUES ({p}, {p}, {p}, {p}, {p})''', (uid, amount, bank_name, account_number, account_name))
+                      VALUES ({p}, {p}, {p}, {p}, {p})''', (uid, amount, bank_name, account_number, account_name))
     cursor.execute(f'''INSERT INTO transactions (user_id, amount, tx_type, description)
-    VALUES ({p}, {p}, 'Bank Cashout Request', {p})''', (uid, amount, f"Cashout to {bank_name} ({account_number})"))
+                      VALUES ({p}, {p}, 'Bank Cashout Request', {p})''', (uid, amount, f"Cashout to {bank_name} ({account_number})"))
     db.commit()
     logger.info(f"Payout requested by user {uid} for amount {amount}")
     return jsonify({'success': True, 'message': 'Cashout request submitted!'})
@@ -1035,8 +1095,8 @@ def handle_products():
             return jsonify({'success': False, 'message': 'Title and WhatsApp contact required.'}), 400
 
         cursor.execute(f'''INSERT INTO products (user_id, title, category, price, description, whatsapp_number, image_url, video_url, listing_type)
-        VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})''',
-        (uid, title, category, price, description, whatsapp, image_url, video_url, listing_type))
+                          VALUES ({p}, {p}, {p}, {p}, {p}, {p}, {p}, {p}, {p})''',
+                       (uid, title, category, price, description, whatsapp, image_url, video_url, listing_type))
         db.commit()
         return jsonify({'success': True, 'message': f'Listing published on Ijebu {listing_type} Hub!'})
 
@@ -1062,6 +1122,7 @@ def handle_products():
 def update_dating_profile():
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Login required.'}), 401
+
     data = request.json or {}
     age = int(data.get('age', 18))
     gender = data.get('gender', 'Female')
@@ -1073,8 +1134,9 @@ def update_dating_profile():
     db = get_db()
     cursor = db.cursor()
     p = query_param()
+
     cursor.execute(f'''UPDATE users SET age={p}, gender={p}, relationship_intent={p}, bio={p}, occupation={p}, is_dating_active={p}
-    WHERE id={p}''', (age, gender, intent, bio, occupation, is_active, session['user_id']))
+                      WHERE id={p}''', (age, gender, intent, bio, occupation, is_active, session['user_id']))
     db.commit()
     return jsonify({'success': True, 'message': 'Dating profile updated!'})
 
@@ -1084,6 +1146,7 @@ def get_dating_matches():
     cursor = db.cursor()
     p = query_param()
     current_uid = session.get('user_id') or 0
+
     sql = f'''
         SELECT id, full_name, username, user_type, age, gender, relationship_intent, bio, occupation, avatar_url, created_at
         FROM users WHERE is_dating_active = 1 AND id != {p} ORDER BY id DESC LIMIT 50
@@ -1165,11 +1228,11 @@ def handle_posts():
     if group_filter > 0:
         cursor.execute(f'''
             SELECT p.id, p.user_id, p.group_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
-            u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
-            g.name AS group_name,
-            (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
-            (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments_count,
-            CASE WHEN EXISTS (SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}) THEN 1 ELSE 0 END AS liked_by_me
+                   u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
+                   g.name AS group_name,
+                   (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
+                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments_count,
+                   CASE WHEN EXISTS (SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}) THEN 1 ELSE 0 END AS liked_by_me
             FROM posts p
             JOIN users u ON p.user_id = u.id
             LEFT JOIN groups g ON p.group_id = g.id
@@ -1179,11 +1242,11 @@ def handle_posts():
     else:
         cursor.execute(f'''
             SELECT p.id, p.user_id, p.group_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
-            u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
-            g.name AS group_name,
-            (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
-            (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments_count,
-            CASE WHEN EXISTS (SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}) THEN 1 ELSE 0 END AS liked_by_me
+                   u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
+                   g.name AS group_name,
+                   (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
+                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments_count,
+                   CASE WHEN EXISTS (SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}) THEN 1 ELSE 0 END AS liked_by_me
             FROM posts p
             JOIN users u ON p.user_id = u.id
             LEFT JOIN groups g ON p.group_id = g.id
@@ -1250,9 +1313,9 @@ def handle_comments(post_id):
     uid = session.get('user_id') or 0
     cursor.execute(f'''
         SELECT c.*, u.full_name, u.username, u.avatar_url,
-        pu.username AS parent_username,
-        (SELECT COUNT(*) FROM comment_likes cl WHERE cl.comment_id = c.id) AS likes_count,
-        CASE WHEN EXISTS (SELECT 1 FROM comment_likes cl WHERE cl.comment_id = c.id AND cl.user_id = {p}) THEN 1 ELSE 0 END AS liked_by_me
+               pu.username AS parent_username,
+               (SELECT COUNT(*) FROM comment_likes cl WHERE cl.comment_id = c.id) AS likes_count,
+               CASE WHEN EXISTS (SELECT 1 FROM comment_likes cl WHERE cl.comment_id = c.id AND cl.user_id = {p}) THEN 1 ELSE 0 END AS liked_by_me
         FROM comments c
         JOIN users u ON c.user_id = u.id
         LEFT JOIN comments pc ON c.parent_id = pc.id
@@ -1295,7 +1358,7 @@ def get_user_profile(username):
 
     cursor.execute(f'''
         SELECT id, full_name, phone, username, user_type, referral_code, wallet_balance, is_verified_merchant,
-        age, gender, relationship_intent, bio, occupation, avatar_url, cover_url, created_at
+               age, gender, relationship_intent, bio, occupation, avatar_url, cover_url, created_at
         FROM users WHERE LOWER(username) = {p}
     ''', (username.lower(),))
     user = cursor.fetchone()
@@ -1321,11 +1384,11 @@ def get_user_profile(username):
 
     cursor.execute(f'''
         SELECT p.id, p.user_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
-        u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
-        g.name AS group_name,
-        (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
-        (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments_count,
-        CASE WHEN EXISTS (SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}) THEN 1 ELSE 0 END AS liked_by_me
+               u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
+               g.name AS group_name,
+               (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
+               (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments_count,
+               CASE WHEN EXISTS (SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}) THEN 1 ELSE 0 END AS liked_by_me
         FROM posts p JOIN users u ON p.user_id = u.id
         LEFT JOIN groups g ON p.group_id = g.id
         WHERE p.user_id = {p} ORDER BY p.id DESC
@@ -1440,8 +1503,7 @@ def chat_thread(username):
     db.commit()
 
     cursor.execute(f'''
-        SELECT m.id, m.sender_id, m.receiver_id, m.content, m.is_read, m.created_at,
-        u.full_name, u.username
+        SELECT m.id, m.sender_id, m.receiver_id, m.content, m.is_read, m.created_at, u.full_name, u.username
         FROM messages m JOIN users u ON m.sender_id = u.id
         WHERE (m.sender_id = {p} AND m.receiver_id = {p}) OR (m.sender_id = {p} AND m.receiver_id = {p})
         ORDER BY m.id ASC LIMIT 300
@@ -1451,7 +1513,7 @@ def chat_thread(username):
     return jsonify({'success': True, 'other': dict(other), 'messages': messages, 'me_id': uid})
 
 # ======================================================================
-# ROBUST ADMIN API (MONITOR ALL INCOME & WALLETS)
+# ROBUST ADMIN API (ADMIN PROFILE EDITING & MEMBER SEARCH)
 # ======================================================================
 @app.route('/api/admin/overview', methods=['GET'])
 def get_admin_overview():
@@ -1507,8 +1569,7 @@ def get_admin_overview():
 @app.route('/api/admin/posts', methods=['GET', 'DELETE'])
 def admin_manage_posts():
     admin, err = require_admin()
-    if err:
-        return err
+    if err: return err
     db = get_db()
     cursor = db.cursor()
     p = query_param()
@@ -1525,7 +1586,7 @@ def admin_manage_posts():
 
     cursor.execute('''
         SELECT p.id, p.content, p.post_type, p.image_url, p.created_at,
-        u.full_name, u.username, g.name AS group_name
+               u.full_name, u.username, g.name AS group_name
         FROM posts p
         JOIN users u ON p.user_id = u.id
         LEFT JOIN groups g ON p.group_id = g.id
@@ -1536,8 +1597,7 @@ def admin_manage_posts():
 @app.route('/api/admin/users', methods=['GET', 'DELETE'])
 def admin_manage_users():
     admin, err = require_admin()
-    if err:
-        return err
+    if err: return err
     db = get_db()
     cursor = db.cursor()
     p = query_param()
@@ -1556,14 +1616,44 @@ def admin_manage_users():
         db.commit()
         return jsonify({'success': True, 'message': 'Member removed.'})
 
-    cursor.execute("SELECT id, full_name, username, phone, user_type, wallet_balance FROM users ORDER BY id DESC")
+    cursor.execute("SELECT id, full_name, username, phone, user_type, wallet_balance, occupation FROM users ORDER BY id DESC")
     return jsonify([dict(r) for r in cursor.fetchall()])
+
+@app.route('/api/admin/users/update', methods=['POST'])
+def admin_update_user():
+    admin, err = require_admin()
+    if err: return err
+
+    data = request.json or {}
+    uid = data.get('user_id')
+    if not uid:
+        return jsonify({'success': False, 'message': 'User ID required.'}), 400
+
+    full_name = data.get('full_name', '').strip()
+    phone = data.get('phone', '').strip()
+    user_type = data.get('user_type', 'Resident').strip()
+    occupation = data.get('occupation', '').strip()
+    try:
+        wallet_balance = float(data.get('wallet_balance', 0.0))
+    except (ValueError, TypeError):
+        wallet_balance = 0.0
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    cursor.execute(f'''
+        UPDATE users
+        SET full_name = {p}, phone = {p}, user_type = {p}, wallet_balance = {p}, occupation = {p}
+        WHERE id = {p}
+    ''', (full_name, phone, user_type, wallet_balance, occupation, uid))
+    db.commit()
+    return jsonify({'success': True, 'message': 'Member profile updated successfully!'})
 
 @app.route('/api/admin/partner-requests', methods=['GET', 'POST'])
 def admin_partner_requests():
     admin, err = require_admin()
-    if err:
-        return err
+    if err: return err
     db = get_db()
     cursor = db.cursor()
     p = query_param()
@@ -1597,8 +1687,7 @@ def admin_partner_requests():
 @app.route('/api/admin/payouts', methods=['GET', 'POST'])
 def manage_payouts():
     admin, err = require_admin()
-    if err:
-        return err
+    if err: return err
     db = get_db()
     cursor = db.cursor()
     p = query_param()
@@ -1654,12 +1743,11 @@ INDEX_TEMPLATE = r"""
   --text-dark: #050505;
   --text-muted: #65676b;
 }
-
 * { box-sizing: border-box; margin:0; padding:0; font-family:'Plus Jakarta Sans', sans-serif; -webkit-tap-highlight-color:transparent; }
 body { background: var(--bg-body); color: var(--text-dark); display: flex; flex-direction: column; min-height: 100vh; padding-bottom: 70px; }
 
-#toast-container { position: fixed; top: 12px; right: 12px; left: 12px; z-index: 9999; }
-.toast { background: var(--navy-blue); color: #fff; padding: 12px; border-radius: 12px; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; text-align: center; }
+#toast-container { position: fixed; top: 12px; right: 12px; left: 12px; z-index: 9999; pointer-events:none; }
+.toast { background: var(--navy-blue); color: #fff; padding: 12px; border-radius: 12px; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
 
 header { background: #fff; padding: 0.6rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-light); position: sticky; top:0; z-index: 100; gap: 8px; }
 .header-brand { display: flex; align-items: center; gap: 8px; cursor: pointer; flex-shrink: 0; }
@@ -1670,6 +1758,16 @@ header { background: #fff; padding: 0.6rem 1rem; display: flex; justify-content:
 .global-search-wrap { position: relative; flex: 1; max-width: 240px; }
 .global-search-input { padding: 6px 12px 6px 32px; border-radius: 20px; border: 1.5px solid var(--border-light); font-size: 0.78rem; outline: none; width: 100%; background: #f0f2f5; }
 .global-search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.75rem; }
+
+.header-right-actions { display: flex; align-items: center; gap: 8px; position: relative; }
+.icon-btn { background: #f0f2f5; border: none; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--text-dark); cursor: pointer; position: relative; font-size: 1rem; }
+.icon-btn:hover { background: #e4e6eb; }
+
+/* NOTIFICATION DROPDOWN */
+.notif-dropdown { display: none; position: absolute; top: 46px; right: 0; width: 320px; max-height: 400px; overflow-y: auto; background: #fff; border-radius: 12px; border: 1px solid var(--border-light); box-shadow: 0 4px 16px rgba(0,0,0,0.15); z-index: 1100; padding: 10px; }
+.notif-item { padding: 10px; border-bottom: 1px solid #f0f2f5; display: flex; gap: 10px; align-items: center; font-size: 0.8rem; cursor: pointer; border-radius: 8px; }
+.notif-item:hover { background: #f8fafc; }
+.notif-item.unread { background: #e7f3ff; font-weight: 600; }
 
 .top-nav-pills { display: flex; gap: 6px; padding: 0.6rem 0.5rem; background: #fff; border-bottom: 1px solid var(--border-light); overflow-x: auto; scrollbar-width: none; }
 .top-nav-pills::-webkit-scrollbar { display: none; }
@@ -1683,13 +1781,16 @@ header { background: #fff; padding: 0.6rem 1rem; display: flex; justify-content:
 .view-section.active { display: block; }
 .card { background: #fff; border: 1px solid var(--border-light); border-radius: 12px; padding: 1rem; margin-bottom: 0.85rem; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
 
-/* FACEBOOK STYLE COVER BANNERS */
+/* CLICKABLE USER NAMES */
+.clickable-name { cursor: pointer; color: var(--navy-blue); font-weight: 800; }
+.clickable-name:hover { text-decoration: underline; color: var(--fb-blue); }
+
 .fb-group-banner { height: 160px; background: linear-gradient(135deg, #1877f2, #0b1e36); border-radius: 12px 12px 0 0; position: relative; margin: -1rem -1rem 45px -1rem; background-size: cover; background-position: center; }
 .fb-group-avatar { position: absolute; bottom: -35px; left: 16px; width: 75px; height: 75px; border-radius: 16px; border: 4px solid #fff; background: var(--fb-blue); overflow: hidden; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 800; }
 
 .feed-post { background: #fff; border: 1px solid var(--border-light); border-radius: 12px; padding: 0.88rem; margin-bottom: 0.85rem; }
 .post-header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
-.avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; flex-shrink: 0; background-size: cover; background-position: center; }
+.avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; flex-shrink: 0; background-size: cover; background-position: center; cursor: pointer; }
 .post-actions { display: flex; gap: 6px; padding-top: 8px; margin-top: 8px; border-top: 1px solid var(--border-light); }
 .post-action-btn { flex: 1; background: none; border: none; padding: 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; }
 .post-action-btn:hover { background: #f0f2f5; }
@@ -1727,14 +1828,21 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
     <input type="text" class="global-search-input" placeholder="Search members, pages..." onkeyup="handleGlobalSearch(this.value)">
   </div>
 
-  <div id="header-auth"></div>
+  <div class="header-right-actions">
+    <button class="icon-btn" onclick="toggleNotificationsMenu()" title="Notifications">
+      <i class="fa-solid fa-bell"></i>
+      <span class="unread-badge notif-unread-badge" id="notif-badge-count" style="display:none; position:absolute; top:-2px; right:-2px;">0</span>
+    </button>
+    <div class="notif-dropdown" id="notif-dropdown-menu"></div>
+    <div id="header-auth"></div>
+  </div>
 </header>
 
 <div class="top-nav-pills">
-  <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-house"></i> Main Feed</div>
+  <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-house"></i> Feed</div>
   <div class="nav-pill" data-nav="pages" onclick="switchNav('pages')"><i class="fa-solid fa-flag"></i> Pages</div>
   <div class="nav-pill" data-nav="chat" onclick="switchNav('chat')">
-    <i class="fa-solid fa-comments"></i> Chat 
+    <i class="fa-solid fa-comments"></i> Chat
     <span class="unread-badge chat-unread-badge" style="display:none;">0</span>
   </div>
   <div class="nav-pill" data-nav="events" onclick="switchNav('events')"><i class="fa-solid fa-calendar-days"></i> Events</div>
@@ -1779,9 +1887,8 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
   <div id="view-page-detail" class="view-section">
     <button onclick="switchNav('pages')" style="background:#fff;border:1px solid var(--border-light);padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;margin-bottom:8px;">← Back to Pages</button>
     <div id="page-detail-header" class="card"></div>
-    
     <div class="card" id="page-post-composer" style="display:none;">
-      <h4 style="font-size:0.88rem; font-weight:800; margin-bottom:6px;">Post to Page (Shows on Main Feed too)</h4>
+      <h4 style="font-size:0.88rem; font-weight:800; margin-bottom:6px;">Post to Page</h4>
       <form onsubmit="handlePagePostSubmit(event)">
         <input type="hidden" id="active-page-id" value="0">
         <textarea class="form-control" id="page-post-content" rows="2" placeholder="Write an update on this Page..."></textarea>
@@ -1791,7 +1898,6 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
         <button type="submit" class="btn-submit">Publish Page Post</button>
       </form>
     </div>
-    
     <div id="page-posts-container"></div>
   </div>
 
@@ -1801,7 +1907,6 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
       <h3 style="font-size:1rem;font-weight:800;margin-bottom:8px;color:var(--navy-blue);">💬 Messages & Discussions</h3>
       <div id="chat-partners-container"></div>
     </div>
-    
     <div id="chat-thread-wrap" style="display:none;">
       <button onclick="closeChatThread()" style="background:#fff;border:1px solid var(--border-light);padding:4px 10px;border-radius:8px;font-size:0.75rem;font-weight:700;margin-bottom:8px;">← Back to All Messages</button>
       <div id="chat-thread-header" class="card" style="padding:0.6rem 0.88rem;margin-bottom:6px;"></div>
@@ -2041,7 +2146,6 @@ function switchNav(target) {
 
   const pill = document.querySelector(`.nav-pill[data-nav="${target}"]`);
   if(pill) pill.classList.add('active');
-
   const view = document.getElementById(`view-${target}`);
   if(view) view.classList.add('active');
 
@@ -2063,13 +2167,59 @@ async function checkSession() {
       currentUser = data.user;
       renderHeaderAuth();
       updateUnreadChatBadges(currentUser.unread_chats || 0);
-      if(currentUser.user_type === 'Admin') document.getElementById('admin-pill').style.display = 'flex';
+      loadNotifications();
+      if(currentUser.user_type === 'Admin')
+        document.getElementById('admin-pill').style.display = 'flex';
     } else {
       currentUser = null;
       renderHeaderAuth();
-      window.location.href = '/auth'; // LOAD AUTH FIRST IF NOT LOGGED IN
+      window.location.href = '/auth';
     }
   } catch(e){}
+}
+
+/* FACEBOOK-STYLE NOTIFICATIONS JS */
+async function loadNotifications() {
+  if(!currentUser) return;
+  try {
+    const res = await fetch('/api/notifications');
+    const data = await res.json();
+    if(data.success) {
+      const badge = document.getElementById('notif-badge-count');
+      if(data.unread_count > 0) {
+        badge.innerText = data.unread_count;
+        badge.style.display = 'inline-block';
+      } else {
+        badge.style.display = 'none';
+      }
+
+      const menu = document.getElementById('notif-dropdown-menu');
+      if(!data.notifications.length) {
+        menu.innerHTML = '<div style="padding:10px;text-align:center;color:var(--text-muted);font-size:0.8rem;">No notifications yet.</div>';
+        return;
+      }
+      menu.innerHTML = data.notifications.map(n => `
+        <div class="notif-item ${n.is_read ? '' : 'unread'}" onclick="openProfile('${n.sender_username || 'ijebuconnect'}')">
+          <div class="avatar" style="width:32px;height:32px;background:var(--fb-blue);">${n.sender_avatar ? `<img src="${n.sender_avatar}" style="width:100%;height:100%;border-radius:50%;">` : '🔔'}</div>
+          <div>
+            <div>${n.message}</div>
+            <div style="font-size:0.65rem;color:var(--text-muted);">${formatTimestamp(n.created_at)}</div>
+          </div>
+        </div>
+      `).join('');
+    }
+  } catch(e){}
+}
+
+async function toggleNotificationsMenu() {
+  const menu = document.getElementById('notif-dropdown-menu');
+  const isVisible = menu.style.display === 'block';
+  menu.style.display = isVisible ? 'none' : 'block';
+
+  if(!isVisible && currentUser) {
+    await fetch('/api/notifications/read', {method:'POST'});
+    document.getElementById('notif-badge-count').style.display = 'none';
+  }
 }
 
 function updateUnreadChatBadges(count) {
@@ -2089,7 +2239,7 @@ function renderHeaderAuth() {
   if(currentUser) {
     box.innerHTML = `
       <div style="display:flex;align-items:center;gap:6px;">
-        <b style="font-size:0.78rem;cursor:pointer;" onclick="openProfile('${currentUser.username}')">@${currentUser.username}</b>
+        <span class="clickable-name" style="font-size:0.78rem;" onclick="openProfile('${currentUser.username}')">@${currentUser.username}</span>
         <button onclick="handleLogout()" style="background:#ef4444;color:#fff;border:none;padding:4px 8px;border-radius:10px;font-size:0.7rem;font-weight:700;cursor:pointer;">Logout</button>
       </div>`;
   } else {
@@ -2110,24 +2260,22 @@ async function handleGlobalSearch(q) {
     if(document.getElementById('view-search').classList.contains('active')) switchNav('feed');
     return;
   }
-
   switchNav('search');
   const container = document.getElementById('search-results-container');
   container.innerHTML = '<div style="text-align:center;padding:1rem;"><i class="fa-solid fa-spinner fa-spin"></i> Searching...</div>';
 
   const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
   const data = await res.json();
-
   let html = '';
 
   if(data.users && data.users.length) {
     html += `<h4 style="font-size:0.88rem;margin-bottom:6px;color:var(--text-muted);">Registered Members</h4>`;
     html += data.users.map(u => `
       <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-        <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="openProfile('${u.username}')">
-          <div class="avatar" style="width:40px;height:40px;background:var(--fb-blue);">${u.avatar_url ? `<img src="${u.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : u.full_name.charAt(0)}</div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div class="avatar" style="width:40px;height:40px;background:var(--fb-blue);" onclick="openProfile('${u.username}')">${u.avatar_url ? `<img src="${u.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : u.full_name.charAt(0)}</div>
           <div>
-            <h4 style="font-weight:800;font-size:0.88rem;">${u.full_name}</h4>
+            <h4 class="clickable-name" style="font-size:0.88rem;" onclick="openProfile('${u.username}')">${u.full_name}</h4>
             <p style="font-size:0.72rem;color:var(--text-muted);">@${u.username} • ${u.occupation || u.user_type}</p>
           </div>
         </div>
@@ -2158,7 +2306,6 @@ async function handleGlobalSearch(q) {
   if(!html) {
     html = `<div class="card" style="text-align:center;">No matching members or pages found for "${q}".</div>`;
   }
-
   container.innerHTML = html;
 }
 
@@ -2193,7 +2340,6 @@ async function loadChatPartners() {
       </div>
     `;
   }).join('');
-
   updateUnreadChatBadges(totalUnread);
 }
 
@@ -2217,7 +2363,7 @@ async function openChatThread(username) {
     <div style="display:flex;align-items:center;gap:10px;">
       <div class="avatar" style="width:36px;height:36px;background:var(--fb-blue);">${other.avatar_url ? `<img src="${other.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : other.full_name.charAt(0)}</div>
       <div>
-        <h4 style="font-weight:800;font-size:0.9rem;">${other.full_name}</h4>
+        <h4 class="clickable-name" style="font-size:0.9rem;" onclick="openProfile('${other.username}')">${other.full_name}</h4>
         <p style="font-size:0.7rem;color:var(--text-muted);">@${other.username}</p>
       </div>
     </div>
@@ -2285,6 +2431,7 @@ async function handleProductSubmit(e) {
   const type = document.getElementById('prod-type').value;
   const fileInput = document.getElementById('prod-img-file');
   let uploadedImg = '', uploadedVid = '';
+
   if(fileInput && fileInput.files[0]) {
     const upload = await uploadSelectedFile(fileInput);
     if(upload.is_video) uploadedVid = upload.url;
@@ -2329,7 +2476,7 @@ async function loadCategoryListings(type, containerId) {
       <div style="flex:1;">
         <h4 style="font-weight:800;font-size:0.9rem;">${p.title}</h4>
         <div style="color:var(--emerald-green);font-weight:800;font-size:0.85rem;">₦${p.price.toLocaleString()}</div>
-        <div style="font-size:0.72rem;color:var(--text-muted);">${p.category} • @${p.seller_username}</div>
+        <div style="font-size:0.72rem;color:var(--text-muted);">${p.category} • <span class="clickable-name" onclick="openProfile('${p.seller_username}')">@${p.seller_username}</span></div>
       </div>
       <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" style="background:#25d366;color:#fff;padding:6px 10px;border-radius:6px;font-size:0.75rem;text-decoration:none;font-weight:700;"><i class="fa-brands fa-whatsapp"></i> Chat</a>
     </div>
@@ -2412,9 +2559,9 @@ async function loadDatingMatches() {
   if(!matches.length) { container.innerHTML = '<div class="card">No active singles on feed yet.</div>'; return; }
   container.innerHTML = matches.map(m => `
     <div class="card" style="display:flex;gap:10px;align-items:center;">
-      <div class="avatar" style="width:48px;height:48px;background:var(--fb-blue);">${m.avatar_url ? `<img src="${m.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : m.full_name.charAt(0)}</div>
+      <div class="avatar" style="width:48px;height:48px;background:var(--fb-blue);" onclick="openProfile('${m.username}')">${m.avatar_url ? `<img src="${m.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : m.full_name.charAt(0)}</div>
       <div style="flex:1;">
-        <h4 style="font-weight:800;font-size:0.88rem;">${m.full_name}, ${m.age}</h4>
+        <h4 class="clickable-name" style="font-size:0.88rem;" onclick="openProfile('${m.username}')">${m.full_name}, ${m.age}</h4>
         <div style="font-size:0.72rem;color:var(--emerald-green);font-weight:700;">${m.relationship_intent} • ${m.gender}</div>
         <div style="font-size:0.78rem;color:var(--text-muted);">"${m.bio || 'Living in Ijebu'}"</div>
       </div>
@@ -2438,10 +2585,11 @@ async function openProfile(username) {
   const res = await fetch(`/api/users/${encodeURIComponent(username)}`);
   const data = await res.json();
   if(!data.success) return showToast(data.message, 'error');
+
   const u = data.user;
   const isSelf = currentUser && currentUser.id === u.id;
   const coverBg = u.cover_url ? `style="background-image:url('${u.cover_url}')"` : '';
-  
+
   let walletBlock = '';
   if(isSelf && (u.user_type === 'CPN Partner' || u.user_type === 'Admin')) {
     walletBlock = `
@@ -2451,6 +2599,7 @@ async function openProfile(username) {
       </div>
     `;
   }
+
   const postsHtml = u.posts.length ? u.posts.map(p => renderPostCard(p)).join('') : '<div class="card" style="text-align:center;">No wall updates yet.</div>';
 
   document.getElementById('profile-wall-container').innerHTML = `
@@ -2469,7 +2618,6 @@ async function openProfile(username) {
       <div style="display:flex;gap:6px;margin-top:10px;">
         ${isSelf ? `<button onclick="openEditProfileModal()" class="btn-submit" style="font-size:0.78rem;">✏️ Edit Profile Details</button>` : `
           <button onclick="startChatWith('${u.username}')" class="btn-submit" style="font-size:0.78rem;background:var(--navy-blue);"><i class="fa-solid fa-paper-plane"></i> Message</button>
-          <button onclick="toggleFollow('${u.username}')" class="btn-submit" style="font-size:0.78rem;">${u.is_following ? 'Unfollow' : 'Follow'}</button>
         `}
       </div>
     </div>
@@ -2565,8 +2713,8 @@ async function openPageDetail(pageId) {
   const res = await fetch(`/api/pages/${pageId}`);
   const data = await res.json();
   if(!data.success) return showToast(data.message, 'error');
-  const g = data.page;
 
+  const g = data.page;
   document.getElementById('active-page-id').value = g.id;
   const coverBg = g.cover_url ? `style="background-image:url('${g.cover_url}')"` : '';
   const avatarHtml = g.avatar_url ? `<img src="${g.avatar_url}" style="width:100%;height:100%;object-fit:cover;">` : `<i class="fa-solid fa-flag"></i>`;
@@ -2581,7 +2729,7 @@ async function openPageDetail(pageId) {
         <p style="font-size:0.78rem;color:var(--text-muted);">${g.member_count} Followers</p>
       </div>
       <div>
-        ${g.is_creator ? `<button onclick="openPageEditModal(${g.id}, '${g.name.replace(/'/g, "\\'")}', '${(g.description||'').replace(/'/g, "\\'")}')" class="btn-group-edit"><i class="fa-solid fa-pen-to-square"></i> Edit Page Details</button>` : ''}
+        ${g.is_creator ? `<button onclick="openPageEditModal(${g.id}, '${g.name.replace(/'/g, "\\'")}', '${(g.description||'').replace(/'/g, "\\'")}')" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.75rem;"><i class="fa-solid fa-pen-to-square"></i> Edit Page</button>` : ''}
         <button onclick="joinPage(${g.id})" class="btn-submit" style="width:auto;padding:8px 14px;font-size:0.8rem;background:${g.is_member ? '#ef4444' : 'var(--fb-blue)'};">
           ${g.is_member ? 'Unfollow Page' : 'Follow Page'}
         </button>
@@ -2686,7 +2834,7 @@ function renderPostCard(p) {
           ${p.avatar_url ? `<img src="${p.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : p.full_name.charAt(0)}
         </div>
         <div>
-          <div style="font-size:0.85rem;font-weight:800;cursor:pointer;" onclick="openProfile('${p.username}')">${p.full_name}</div>
+          <div class="clickable-name" style="font-size:0.85rem;" onclick="openProfile('${p.username}')">${p.full_name}</div>
           <div style="font-size:0.7rem;color:var(--text-muted);">@${p.username} • ${formatTimestamp(p.created_at)}</div>
         </div>
         ${pageBadge}
@@ -2775,12 +2923,11 @@ async function toggleComments(pid) {
 
   const res = await fetch(`/api/posts/${pid}/comments`);
   const comments = await res.json();
-
   box.innerHTML = `
     <div id="comment-list-${pid}">
       ${comments.map(c => `
         <div class="comment-item ${c.parent_id > 0 ? 'comment-reply-item' : ''}">
-          <span style="font-weight:800;">@${c.username}</span> ${c.parent_username ? `<small style="color:var(--fb-blue);">replying to @${c.parent_username}</small>` : ''}: ${c.content}
+          <span class="clickable-name" onclick="openProfile('${c.username}')">@${c.username}</span> ${c.parent_username ? `<small style="color:var(--fb-blue);">replying to @${c.parent_username}</small>` : ''}: ${c.content}
           <div style="display:flex;gap:12px;align-items:center;margin-top:4px;font-size:0.75rem;color:var(--text-muted);">
             <span>🕒 ${formatTimestamp(c.created_at)}</span>
             <span onclick="toggleCommentLike(${c.id}, ${pid})" style="cursor:pointer;font-weight:700;">❤️ ${c.likes_count || 0}</span>
@@ -2834,7 +2981,6 @@ function sharePost(postId) {
   }
 }
 
-// FAST EXECUTION: LOAD AUTH FIRST THEN HYDRATE FEED
 window.onload = async function() {
   await checkSession();
   if(currentUser) {
@@ -2859,14 +3005,11 @@ AUTH_TEMPLATE = r"""
 * { box-sizing: border-box; margin:0; padding:0; font-family:'Plus Jakarta Sans', sans-serif; }
 body { background: #f0f2f5; color: #0f172a; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; padding: 1rem; }
 .auth-card { background: #fff; border: 1px solid var(--border-light); border-radius: 18px; padding: 1.5rem; max-width: 440px; width: 100%; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
-
 .auth-logo-img { max-height: 75px; width: auto; object-fit: contain; margin-bottom: 10px; border-radius: 8px; }
 .brand { font-size: 1.5rem; font-weight: 800; color: var(--fb-blue); margin-bottom: 0.2rem; }
-
 .auth-tabs { display: flex; margin: 12px 0; border-bottom: 2px solid #e2e8f0; }
 .auth-tab-btn { flex: 1; padding: 10px; border: none; background: none; font-weight: 700; font-size: 0.88rem; color: #64748b; cursor: pointer; }
 .auth-tab-btn.active { color: var(--fb-blue); border-bottom: 3px solid var(--fb-blue); }
-
 .form-group { display: flex; flex-direction: column; gap: 4px; margin-bottom: 0.85rem; text-align: left; }
 .form-control { padding: 10px 12px; border-radius: 10px; border: 1.5px solid var(--border-light); font-size: 0.88rem; outline: none; width: 100%; }
 .btn-submit { background: var(--fb-blue); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 700; font-size: 0.88rem; cursor: pointer; width: 100%; margin-top: 6px; }
@@ -2878,7 +3021,6 @@ body { background: #f0f2f5; color: #0f172a; display: flex; flex-direction: colum
   <img src="{{ auth_logo }}" alt="Logo" class="auth-logo-img" onerror="this.style.display='none'">
   <div class="brand">IJEBU CONNECT</div>
   <p style="font-size:0.78rem;color:#64748b;">Connect, network, and trade across Ijebu.</p>
-  
   <div class="auth-tabs">
     <button class="auth-tab-btn active" id="tab-login" onclick="switchAuthTab('login')">Sign In</button>
     <button class="auth-tab-btn" id="tab-register" onclick="switchAuthTab('register')">Register New Member</button>
@@ -2985,7 +3127,8 @@ table { width:100%; border-collapse:collapse; background:#fff; border-radius:10p
 th, td { padding:8px 10px; text-align:left; border-bottom:1px solid #cbd5e1; }
 th { background:#0b1e36; color:#fff; }
 .btn-act { padding:4px 8px; border-radius:6px; border:none; color:#fff; font-weight:700; cursor:pointer; font-size:0.72rem; }
-.btn-app { background:#059669; } .btn-rej { background:#ef4444; } .btn-del { background:#dc2626; }
+.btn-app { background:#059669; } .btn-rej { background:#ef4444; } .btn-del { background:#dc2626; } .btn-edit { background:#2563eb; }
+.form-control { padding: 8px 10px; border-radius: 6px; border: 1.5px solid #cbd5e1; font-size: 0.85rem; outline: none; width: 100%; margin-bottom: 8px; }
 .app-footer { margin-top: 2rem; padding: 1rem 0; border-top: 1px solid #cbd5e1; text-align: center; font-size: 0.78rem; color: #64748b; }
 </style>
 </head>
@@ -3019,9 +3162,12 @@ th { background:#0b1e36; color:#fff; }
   </table>
 </div>
 
-<!-- MANAGE MEMBERS TAB -->
+<!-- MANAGE MEMBERS TAB WITH SEARCH BAR -->
 <div id="adm-members" class="tab-sec">
-  <h3>Registered Platform Members</h3>
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+    <h3>Registered Platform Members</h3>
+    <input type="text" id="admin-member-search" class="form-control" placeholder="🔍 Search member name, phone or username..." style="max-width:300px;margin:0;" onkeyup="filterAdminMembers(this.value)">
+  </div>
   <table>
     <thead><tr><th>Full Name</th><th>Username</th><th>Phone</th><th>Type</th><th>Wallet Balance</th><th>Action</th></tr></thead>
     <tbody id="members-body"></tbody>
@@ -3046,12 +3192,39 @@ th { background:#0b1e36; color:#fff; }
   </table>
 </div>
 
+<!-- ADMIN EDIT MEMBER MODAL -->
+<div id="admin-edit-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+  <div class="card" style="max-width:400px;width:100%;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+      <h3 style="font-size:1rem;font-weight:800;">Edit Member Details</h3>
+      <button onclick="closeAdminEditModal()" style="background:none;border:none;font-size:1.4rem;">&times;</button>
+    </div>
+    <form onsubmit="handleAdminUserUpdate(event)">
+      <input type="hidden" id="adm-edit-id">
+      <div><label style="font-size:0.75rem;font-weight:700;">Full Name</label><input type="text" id="adm-edit-name" class="form-control" required></div>
+      <div><label style="font-size:0.75rem;font-weight:700;">Phone</label><input type="text" id="adm-edit-phone" class="form-control" required></div>
+      <div><label style="font-size:0.75rem;font-weight:700;">User Type</label>
+        <select id="adm-edit-type" class="form-control">
+          <option value="Resident">Resident</option>
+          <option value="CPN Partner">CPN Partner</option>
+          <option value="Admin">Admin</option>
+        </select>
+      </div>
+      <div><label style="font-size:0.75rem;font-weight:700;">Wallet Balance (₦)</label><input type="number" step="0.01" id="adm-edit-wallet" class="form-control" required></div>
+      <div><label style="font-size:0.75rem;font-weight:700;">Occupation</label><input type="text" id="adm-edit-occupation" class="form-control"></div>
+      <button type="submit" class="btn-act btn-app" style="width:100%;padding:10px;font-size:0.85rem;margin-top:6px;">Save Changes</button>
+    </form>
+  </div>
+</div>
+
 <footer class="app-footer">
   <p><strong>Willys Media World</strong> &copy; 2026 Admin Dashboard</p>
   <p>Phone: 09018363715 | willysmediaworld@gmail.com</p>
 </footer>
 
 <script>
+let cachedMembers = [];
+
 function switchAdminTab(t) {
   document.querySelectorAll('.admin-tab').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-sec').forEach(s => s.classList.remove('active'));
@@ -3101,8 +3274,13 @@ async function deleteAdminPost(pid) {
 
 async function loadMembers() {
   const res = await fetch('/api/admin/users');
-  const users = await res.json();
+  cachedMembers = await res.json();
+  renderMembersTable(cachedMembers);
+}
+
+function renderMembersTable(users) {
   const body = document.getElementById('members-body');
+  if(!users.length) { body.innerHTML = '<tr><td colspan="6">No matching members found.</td></tr>'; return; }
   body.innerHTML = users.map(u => `
     <tr>
       <td><b>${u.full_name}</b></td>
@@ -3111,10 +3289,56 @@ async function loadMembers() {
       <td><b>${u.user_type}</b></td>
       <td><b>₦${(u.wallet_balance || 0).toLocaleString()}</b></td>
       <td>
-        ${u.user_type !== 'Admin' ? `<button class="btn-act btn-del" onclick="deleteMember(${u.id})">Delete Member</button>` : 'System Admin'}
+        <button class="btn-act btn-edit" onclick="openAdminEditModal(${u.id}, '${u.full_name.replace(/'/g, "\\'")}', '${u.phone}', '${u.user_type}', ${u.wallet_balance || 0}, '${(u.occupation||'').replace(/'/g, "\\'")}')">Edit</button>
+        ${u.user_type !== 'Admin' ? `<button class="btn-act btn-del" onclick="deleteMember(${u.id})">Delete</button>` : ''}
       </td>
     </tr>
   `).join('');
+}
+
+function filterAdminMembers(q) {
+  q = q.toLowerCase().trim();
+  if(!q) { renderMembersTable(cachedMembers); return; }
+  const filtered = cachedMembers.filter(u => 
+    u.full_name.toLowerCase().includes(q) ||
+    u.username.toLowerCase().includes(q) ||
+    u.phone.includes(q)
+  );
+  renderMembersTable(filtered);
+}
+
+function openAdminEditModal(id, name, phone, type, wallet, occupation) {
+  document.getElementById('adm-edit-id').value = id;
+  document.getElementById('adm-edit-name').value = name;
+  document.getElementById('adm-edit-phone').value = phone;
+  document.getElementById('adm-edit-type').value = type;
+  document.getElementById('adm-edit-wallet').value = wallet;
+  document.getElementById('adm-edit-occupation').value = occupation;
+  document.getElementById('admin-edit-modal').style.display = 'flex';
+}
+
+function closeAdminEditModal() { document.getElementById('admin-edit-modal').style.display = 'none'; }
+
+async function handleAdminUserUpdate(e) {
+  e.preventDefault();
+  const res = await fetch('/api/admin/users/update', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      user_id: document.getElementById('adm-edit-id').value,
+      full_name: document.getElementById('adm-edit-name').value,
+      phone: document.getElementById('adm-edit-phone').value,
+      user_type: document.getElementById('adm-edit-type').value,
+      wallet_balance: document.getElementById('adm-edit-wallet').value,
+      occupation: document.getElementById('adm-edit-occupation').value
+    })
+  });
+  const data = await res.json();
+  alert(data.message);
+  if(data.success) {
+    closeAdminEditModal();
+    loadAdminOverview();
+  }
 }
 
 async function deleteMember(uid) {
@@ -3164,7 +3388,7 @@ async function loadPayouts() {
         ${p.status === 'pending' ? `
           <button class="btn-act btn-app" onclick="updatePayout(${p.id}, 'approved')">Approve</button>
           <button class="btn-act btn-rej" onclick="updatePayout(${p.id}, 'rejected')">Reject</button>
-        ` : `<b>${r.status.toUpperCase()}</b>`}
+        ` : `<b>${p.status.toUpperCase()}</b>`}
       </td>
     </tr>
   `).join('');
