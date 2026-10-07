@@ -585,6 +585,49 @@ def mark_notifications_read():
     return jsonify({'success': True})
 
 # ======================================================================
+# FOLLOW / UNFOLLOW ENGINE
+# ======================================================================
+@app.route('/api/users/<username>/follow', methods=['POST'])
+def toggle_follow_user(username):
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+
+    cursor.execute(f"SELECT id, full_name FROM users WHERE LOWER(username) = {p}", (username.lower(),))
+    target = cursor.fetchone()
+
+    if not target:
+        return jsonify({'success': False, 'message': 'User not found.'}), 404
+    target_id = target['id']
+
+    if target_id == uid:
+        return jsonify({'success': False, 'message': 'You cannot follow yourself.'}), 400
+
+    cursor.execute(f"SELECT id FROM followers WHERE follower_id = {p} AND followed_id = {p}", (uid, target_id))
+    existing = cursor.fetchone()
+
+    if existing:
+        cursor.execute(f"DELETE FROM followers WHERE id = {p}", (existing['id'],))
+        is_following = False
+        msg = f"Unfollowed @{username}"
+    else:
+        cursor.execute(f"INSERT INTO followers (follower_id, followed_id) VALUES ({p}, {p})", (uid, target_id))
+        is_following = True
+        msg = f"Following @{username}!"
+        add_notification(target_id, uid, 'follow', uid, f"{session['full_name']} started following you!")
+
+    db.commit()
+
+    cursor.execute(f"SELECT COUNT(*) FROM followers WHERE followed_id = {p}", (target_id,))
+    followers_count = cursor.fetchone()[0]
+
+    return jsonify({'success': True, 'is_following': is_following, 'followers_count': followers_count, 'message': msg})
+
+# ======================================================================
 # CPN COMMISSION ENGINE
 # ======================================================================
 def process_cpn_commission(user_id, upgrade_fee=2000.0):
@@ -1175,7 +1218,7 @@ def send_wink():
         return jsonify({'success': False, 'message': 'Already sent a wink to this member.'})
 
 # ======================================================================
-# SOCIAL FEED & PAGE FEED INTEGRATION
+# SOCIAL FEED & POST DETAIL API
 # ======================================================================
 @app.route('/api/posts', methods=['GET', 'POST'])
 def handle_posts():
@@ -1222,8 +1265,22 @@ def handle_posts():
     current_uid = session.get('user_id') or 0
     post_type_filter = request.args.get('type', 'Social')
     group_filter = int(request.args.get('group_id') or 0)
+    single_post_id = int(request.args.get('post_id') or 0)
 
-    if group_filter > 0:
+    if single_post_id > 0:
+        cursor.execute(f'''
+            SELECT p.id, p.user_id, p.group_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
+                   u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
+                   g.name AS group_name,
+                   (SELECT COUNT(*) FROM post_likes pl WHERE pl.post_id = p.id) AS likes_count,
+                   (SELECT COUNT(*) FROM comments c WHERE c.post_id = p.id) AS comments_count,
+                   CASE WHEN EXISTS (SELECT 1 FROM post_likes pl WHERE pl.post_id = p.id AND pl.user_id = {p}) THEN 1 ELSE 0 END AS liked_by_me
+            FROM posts p
+            JOIN users u ON p.user_id = u.id
+            LEFT JOIN groups g ON p.group_id = g.id
+            WHERE p.id = {p}
+        ''', (current_uid, single_post_id))
+    elif group_filter > 0:
         cursor.execute(f'''
             SELECT p.id, p.user_id, p.group_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
                    u.full_name, u.username, u.user_type, u.avatar_url, u.is_verified_merchant,
@@ -1511,7 +1568,7 @@ def chat_thread(username):
     return jsonify({'success': True, 'other': dict(other), 'messages': messages, 'me_id': uid})
 
 # ======================================================================
-# SEARCHABLE ADMIN API (MANAGE MEMBERS, POSTS, CLAIMS & CASHOUTS VIA SEARCH)
+# SEARCHABLE ADMIN API
 # ======================================================================
 @app.route('/api/admin/overview', methods=['GET'])
 def get_admin_overview():
@@ -1831,7 +1888,8 @@ header { background: #fff; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(
 .comment-item { border-bottom: 1px solid #e2e8f0; padding: 6px 0; font-size: 0.82rem; }
 .comment-reply-item { margin-left: 18px; padding-left: 8px; border-left: 2px solid var(--fb-blue); }
 
-.btn-submit { background: var(--fb-blue); color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 700; font-size: 0.88rem; cursor: pointer; width: 100%; min-height: 42px; }
+.btn-submit { background: var(--fb-blue); color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 700; font-size: 0.88rem; cursor: pointer; width: 100%; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.btn-secondary { background: var(--navy-blue); color: #fff; }
 .form-control { padding: 10px 12px; border-radius: 8px; border: 1.5px solid var(--border-light); font-size: 0.88rem; outline: none; width: 100%; background: #fff; }
 
 .mobile-bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #fff; border-top: 1px solid var(--border-light); display: flex; justify-content: space-around; padding: 6px 0; z-index: 1000; height: 60px; }
@@ -1861,6 +1919,9 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
     </div>
 
     <div class="header-right-actions">
+      <button class="icon-btn" onclick="sharePlatform()" title="Share Platform">
+        <i class="fa-solid fa-share-nodes"></i>
+      </button>
       <button class="icon-btn" onclick="toggleNotificationsMenu()" title="Notifications">
         <i class="fa-solid fa-bell"></i>
         <span class="unread-badge notif-unread-badge" id="notif-badge-count" style="display:none; position:absolute; top:-2px; right:-2px;">0</span>
@@ -2139,6 +2200,9 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 <footer class="app-footer">
   <p><strong>{{ company_name }}</strong> &copy; 2026. All Rights Reserved.</p>
   <p><i class="fa-solid fa-phone"></i> Phone: <strong>09018363715</strong> | <i class="fa-solid fa-envelope"></i> Email: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></p>
+  <div style="margin-top:10px;">
+    <button onclick="sharePlatform()" class="btn-submit btn-secondary" style="width:auto;padding:6px 14px;font-size:0.75rem;"><i class="fa-solid fa-share-nodes"></i> Share Ijebu Connect</button>
+  </div>
 </footer>
 
 <div class="mobile-bottom-nav">
@@ -2217,7 +2281,7 @@ async function checkSession() {
   } catch(e){}
 }
 
-/* FACEBOOK-STYLE NOTIFICATIONS ENGINE */
+/* NOTIFICATIONS ENGINE */
 async function loadNotifications() {
   if(!currentUser) return;
   try {
@@ -2348,7 +2412,7 @@ async function handleGlobalSearch(q) {
   container.innerHTML = html;
 }
 
-/* CHAT & MESSAGING ENGINE */
+/* CHAT ENGINE */
 async function loadChatPartners() {
   if(!currentUser) return window.location.href = '/auth';
   const res = await fetch('/api/chat/partners');
@@ -2620,6 +2684,17 @@ async function sendWink(receiverId) {
   showToast(data.message);
 }
 
+/* FOLLOW TOGGLE JS */
+async function toggleFollow(username) {
+  if(!currentUser) return window.location.href = '/auth';
+  const res = await fetch(`/api/users/${encodeURIComponent(username)}/follow`, {method:'POST'});
+  const data = await res.json();
+  showToast(data.message);
+  if(data.success) {
+    openProfile(username);
+  }
+}
+
 async function openProfile(username) {
   const res = await fetch(`/api/users/${encodeURIComponent(username)}`);
   const data = await res.json();
@@ -2657,7 +2732,9 @@ async function openProfile(username) {
       <div style="display:flex;gap:6px;margin-top:10px;">
         ${isSelf ? `<button onclick="openEditProfileModal()" class="btn-submit" style="font-size:0.78rem;">✏️ Edit Profile Details</button>` : `
           <button onclick="startChatWith('${u.username}')" class="btn-submit" style="font-size:0.78rem;background:var(--navy-blue);"><i class="fa-solid fa-paper-plane"></i> Message</button>
+          <button onclick="toggleFollow('${u.username}')" class="btn-submit" style="font-size:0.78rem;background:${u.is_following ? '#ef4444' : 'var(--fb-blue)'};">${u.is_following ? '✓ Following' : '+ Follow'}</button>
         `}
+        <button onclick="shareMemberProfile('${u.username}')" class="btn-submit btn-secondary" style="font-size:0.78rem;width:auto;"><i class="fa-solid fa-share"></i> Share</button>
       </div>
     </div>
     ${walletBlock}
@@ -2848,12 +2925,15 @@ async function joinPage(pageId) {
   openPageDetail(pageId);
 }
 
-async function loadPosts(postType, containerId, groupId = 0) {
-  const res = await fetch(`/api/posts?type=${postType}&group_id=${groupId}`);
+async function loadPosts(postType, containerId, groupId = 0, singlePostId = 0) {
+  let url = `/api/posts?type=${postType}&group_id=${groupId}`;
+  if(singlePostId > 0) url = `/api/posts?post_id=${singlePostId}`;
+
+  const res = await fetch(url);
   const posts = await res.json();
   const container = document.getElementById(containerId);
   if(!posts.length) {
-    container.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No posts published yet.</div>`;
+    container.innerHTML = `<div class="card" style="text-align:center;color:var(--text-muted);">No posts found.</div>`;
     return;
   }
   container.innerHTML = posts.map(p => renderPostCard(p)).join('');
@@ -2867,7 +2947,7 @@ function renderPostCard(p) {
   const pageBadge = p.group_name ? `<span class="group-badge" onclick="openPageDetail(${p.group_id})"><i class="fa-solid fa-flag"></i> ${p.group_name}</span>` : '';
 
   return `
-    <div class="feed-post">
+    <div class="feed-post" id="post-card-${p.id}">
       <div class="post-header">
         <div class="avatar" style="background:var(--fb-blue);" onclick="openProfile('${p.username}')">
           ${p.avatar_url ? `<img src="${p.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : p.full_name.charAt(0)}
@@ -2883,7 +2963,7 @@ function renderPostCard(p) {
       <div class="post-actions">
         <button class="post-action-btn" onclick="toggleLike(${p.id})">❤️ ${p.likes_count || 0} Likes</button>
         <button class="post-action-btn" onclick="toggleComments(${p.id})">💬 ${p.comments_count || 0} Comments</button>
-        <button class="post-action-btn" onclick="sharePost(${p.id})">↪️ Share</button>
+        <button class="post-action-btn" onclick="sharePost(${p.id})">↪️ Share Post</button>
       </div>
       <div id="comments-box-${p.id}" class="comments-box" style="display:none;"></div>
     </div>`;
@@ -3011,19 +3091,44 @@ async function submitComment(pid) {
   toggleComments(pid);
 }
 
+/* SHARING JS FUNCTIONS */
 function sharePost(postId) {
   const shareUrl = `${window.location.origin}/?post=${postId}`;
   if (navigator.share) {
-    navigator.share({ title: 'Ijebu Connect', text: 'Check out this post on Ijebu Connect!', url: shareUrl }).catch(() => {});
+    navigator.share({ title: 'Ijebu Connect Post', text: 'Check out this post on Ijebu Connect!', url: shareUrl }).catch(() => {});
   } else {
-    navigator.clipboard.writeText(shareUrl).then(() => showToast('Link copied to clipboard!'));
+    navigator.clipboard.writeText(shareUrl).then(() => showToast('Post link copied to clipboard!'));
+  }
+}
+
+function shareMemberProfile(username) {
+  const shareUrl = `${window.location.origin}/?user=${encodeURIComponent(username)}`;
+  if (navigator.share) {
+    navigator.share({ title: `${username} on Ijebu Connect`, text: `Connect with @${username} on Ijebu Connect!`, url: shareUrl }).catch(() => {});
+  } else {
+    navigator.clipboard.writeText(shareUrl).then(() => showToast('Profile link copied to clipboard!'));
+  }
+}
+
+function sharePlatform() {
+  const shareUrl = `${window.location.origin}/`;
+  if (navigator.share) {
+    navigator.share({ title: 'Ijebu Connect - Community Platform', text: 'Join Ijebu Connect to network, post, and explore opportunities!', url: shareUrl }).catch(() => {});
+  } else {
+    navigator.clipboard.writeText(shareUrl).then(() => showToast('Platform link copied to clipboard!'));
   }
 }
 
 window.onload = async function() {
   await checkSession();
   if(currentUser) {
-    loadPosts('Social', 'feed-posts-container');
+    if (window.INITIAL_DEEP_LINK_DATA && window.INITIAL_DEEP_LINK_DATA.type === 'post') {
+      loadPosts('Social', 'feed-posts-container', 0, window.INITIAL_DEEP_LINK_DATA.id);
+    } else if (window.INITIAL_DEEP_LINK_DATA && window.INITIAL_DEEP_LINK_DATA.type === 'user') {
+      openProfile(window.INITIAL_DEEP_LINK_DATA.username);
+    } else {
+      loadPosts('Social', 'feed-posts-container');
+    }
   }
 };
 </script>
@@ -3445,12 +3550,53 @@ def index():
     if not host_url.startswith('https://') and 'localhost' not in host_url and '127.0.0.1' not in host_url:
         host_url = host_url.replace('http://', 'https://')
 
-    meta_title = "Ijebu Connect - Facebook-Style Hub"
-    meta_desc = "Connect with pages, friends, and trade on Ijebu Connect."
-    meta_image = f"{host_url.rstrip('/')}/static/uploads/default_preview.jpg"
-    meta_url = request.url
-
     logo1, logo2 = get_system_logos()
+
+    meta_title = "Ijebu Connect - Community Platform"
+    meta_desc = "Connect with pages, friends, and trade on Ijebu Connect."
+    meta_image = f"{host_url.rstrip('/')}{logo2}"
+    meta_url = request.url
+    deep_link_json = 'null'
+
+    # DEEP LINKING PARSER
+    post_id = request.args.get('post')
+    user_param = request.args.get('user')
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if post_id:
+        try:
+            cursor.execute(f'''
+                SELECT p.content, p.image_url, u.full_name
+                FROM posts p JOIN users u ON p.user_id = u.id
+                WHERE p.id = {p}
+            ''', (int(post_id),))
+            post_row = cursor.fetchone()
+            if post_row:
+                meta_title = f"Post by {post_row['full_name']} | Ijebu Connect"
+                meta_desc = post_row['content'][:150] if post_row['content'] else "Check out this post on Ijebu Connect!"
+                if post_row['image_url']:
+                    meta_image = f"{host_url.rstrip('/')}{post_row['image_url']}" if post_row['image_url'].startswith('/') else post_row['image_url']
+                deep_link_json = json.dumps({'type': 'post', 'id': int(post_id)})
+        except Exception as e:
+            logger.error(f"Error parsing deep link post metadata: {e}")
+
+    elif user_param:
+        try:
+            cursor.execute(f'''
+                SELECT full_name, bio, avatar_url FROM users WHERE LOWER(username) = {p}
+            ''', (user_param.lower(),))
+            user_row = cursor.fetchone()
+            if user_row:
+                meta_title = f"{user_row['full_name']} (@{user_param}) | Ijebu Connect"
+                meta_desc = user_row['bio'] if user_row['bio'] else f"Connect with {user_row['full_name']} on Ijebu Connect."
+                if user_row['avatar_url']:
+                    meta_image = f"{host_url.rstrip('/')}{user_row['avatar_url']}" if user_row['avatar_url'].startswith('/') else user_row['avatar_url']
+                deep_link_json = json.dumps({'type': 'user', 'username': user_param})
+        except Exception as e:
+            logger.error(f"Error parsing deep link user metadata: {e}")
 
     return render_template_string(
         INDEX_TEMPLATE,
@@ -3461,7 +3607,7 @@ def index():
         meta_image=meta_image,
         meta_url=meta_url,
         app_logo=logo2,
-        deep_link_json='null'
+        deep_link_json=deep_link_json
     )
 
 @app.route('/auth')
