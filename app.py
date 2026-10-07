@@ -27,6 +27,7 @@ DATABASE_URL = os.environ.get('DATABASE_URL')
 PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '').strip()
 ALLOW_TEST_PAYMENTS = os.environ.get('ALLOW_TEST_PAYMENTS', 'True').lower() == 'true'
 CONTACT_EMAIL = os.environ.get('CONTACT_EMAIL', 'willysmediaworld@gmail.com')
+CONTACT_PHONE = "09018363715"
 COMPANY_NAME = "Willys Media World"
 
 BANK_INFO = {
@@ -119,7 +120,7 @@ def count_user_listings(user_id):
     ad_post_count = cursor.fetchone()[0]
     return prod_count + ad_post_count
 
-# HARDCODED SEEDING TO PREVENT DB RESET LOSSES ON RENDER
+# HARDCODED SEEDING TO PREVENT RENDER DATABASE RESET LOSSES
 def seed_hardcoded_data(cursor, db):
     p = query_param()
     admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect').lower()
@@ -153,21 +154,34 @@ def seed_hardcoded_data(cursor, db):
         except Exception:
             db.rollback()
 
-    cursor.execute("SELECT COUNT(*) FROM groups")
-    if cursor.fetchone()[0] == 0:
+    # Preload Official Pages
+    cursor.execute("SELECT id FROM groups WHERE name LIKE '%Ijebu Imusin%'")
+    if not cursor.fetchone():
         cursor.execute(f'''
         INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
-        VALUES ({p}, 'Ijebu Traders Network', 'Official business and networking hub for Ijebu traders and service providers.', 'Business', '', '')
+        VALUES ({p}, 'Ijebu Imusin Youth Ambassadors Forum', 'Official platform for youth empowerment, leadership, community growth, and networking in Ijebu Imusin.', 'Community', '', '')
         ''', (admin_id,))
-        g1_id = cursor.lastrowid or 1
-
-        cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (g1_id, admin_id))
-        
+        page1_id = cursor.lastrowid or 1
+        cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (page1_id, admin_id))
         cursor.execute(f'''
         INSERT INTO posts (user_id, group_id, content, post_type)
-        VALUES ({p}, {p}, 'Welcome to Ijebu Connect! Connect with members, list products, and join groups.', 'Social')
-        ''', (admin_id, g1_id))
-        db.commit()
+        VALUES ({p}, {p}, 'Welcome to Ijebu Imusin Youth Ambassadors Forum! Join us to empower the youth and build our community.', 'Social')
+        ''', (admin_id, page1_id))
+
+    cursor.execute("SELECT id FROM groups WHERE name LIKE '%Willys Media World%'")
+    if not cursor.fetchone():
+        cursor.execute(f'''
+        INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
+        VALUES ({p}, 'Willys Media World - Learn Coding', 'Welcome to Willys Media World Tech Hub! Learn Web Development, Software Engineering, Python, Flask, and Digital Skills. Phone: 09018363715 | Email: willysmediaworld@gmail.com', 'Education', '', '')
+        ''', (admin_id,))
+        page2_id = cursor.lastrowid or 2
+        cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (page2_id, admin_id))
+        cursor.execute(f'''
+        INSERT INTO posts (user_id, group_id, content, post_type)
+        VALUES ({p}, {p}, '🚀 Welcome to Willys Media World Coding Academy! Start learning Full-Stack Web Development, Python, JavaScript, and HTML/CSS today. Contact us at 09018363715 or willysmediaworld@gmail.com for mentorship.', 'Social')
+        ''', (admin_id, page2_id))
+
+    db.commit()
 
 def init_db():
     with app.app_context():
@@ -385,7 +399,7 @@ def init_db():
             UNIQUE(blocker_id, blocked_id)
         )''')
 
-        # INDEX OPTIMIZATIONS
+        # INDEX OPTIMIZATIONS FOR SPEED
         try:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users (LOWER(username))")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_phone ON users (phone)")
@@ -404,36 +418,6 @@ def init_db():
 
 with app.app_context():
     init_db()
-
-# ======================================================================
-# SEO & INDEXING
-# ======================================================================
-@app.route('/robots.txt')
-def robots_txt():
-    content = f"User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nSitemap: {request.host_url}sitemap.xml"
-    return Response(content, mimetype='text/plain')
-
-@app.route('/google6c2b1a5f4a3ee8d9.html')
-def google_verification():
-    return "google-site-verification: google6c2b1a5f4a3ee8d9.html"
-
-@app.route('/sitemap.xml')
-def sitemap_xml():
-    db = get_db()
-    cursor = db.cursor()
-    base_url = request.host_url.rstrip('/')
-    urls = [f"{base_url}/", f"{base_url}/auth"]
-    try:
-        cursor.execute("SELECT id FROM products WHERE status = 'active' ORDER BY id DESC LIMIT 500")
-        for row in cursor.fetchall():
-            urls.append(f"{base_url}/?product={row['id']}")
-    except Exception:
-        pass
-    xml_content = '<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
-    for u in urls:
-        xml_content += f'<url><loc>{u}</loc><changefreq>daily</changefreq><priority>0.8</priority></url>\n'
-    xml_content += '</urlset>'
-    return Response(xml_content, mimetype='application/xml')
 
 # ======================================================================
 # FILE & MEDIA UPLOADER
@@ -684,111 +668,10 @@ def update_user_profile():
     return jsonify({'success': True, 'message': 'All profile details updated successfully!'})
 
 # ======================================================================
-# FRIEND SUGGESTIONS & SEARCH API
+# PAGES API (FACEBOOK-STYLE PAGES)
 # ======================================================================
-@app.route('/api/users/suggestions', methods=['GET'])
-def get_friend_suggestions():
-    if 'user_id' not in session:
-        return jsonify([])
-    db = get_db()
-    cursor = db.cursor()
-    p = query_param()
-    uid = session['user_id']
-    cursor.execute(f'''
-        SELECT id, full_name, username, avatar_url, user_type, occupation
-        FROM users
-        WHERE id != {p}
-        AND id NOT IN (SELECT followed_id FROM followers WHERE follower_id = {p})
-        ORDER BY RANDOM() LIMIT 6
-    ''', (uid, uid))
-    return jsonify([dict(r) for r in cursor.fetchall()])
-
-@app.route('/api/search', methods=['GET'])
-def global_search():
-    q = request.args.get('q', '').strip().lower()
-    if not q or len(q) < 2:
-        return jsonify({'users': [], 'products': [], 'posts': [], 'groups': []})
-
-    db = get_db()
-    cursor = db.cursor()
-    p = query_param()
-    term = f"%{q}%"
-
-    cursor.execute(f"SELECT id, full_name, username, user_type, avatar_url FROM users WHERE LOWER(full_name) LIKE {p} OR LOWER(username) LIKE {p} LIMIT 10", (term, term))
-    users = [dict(r) for r in cursor.fetchall()]
-
-    cursor.execute(f"SELECT id, title, category, price, listing_type, image_url FROM products WHERE status='active' AND (LOWER(title) LIKE {p} OR LOWER(category) LIKE {p}) LIMIT 10", (term, term))
-    products = [dict(r) for r in cursor.fetchall()]
-
-    cursor.execute(f"SELECT p.id, p.content, p.post_type, u.full_name, u.username FROM posts p JOIN users u ON p.user_id = u.id WHERE LOWER(p.content) LIKE {p} LIMIT 10", (term,))
-    posts = [dict(r) for r in cursor.fetchall()]
-
-    cursor.execute(f"SELECT id, name, category, description, avatar_url FROM groups WHERE LOWER(name) LIKE {p} OR LOWER(description) LIKE {p} LIMIT 10", (term, term))
-    groups = [dict(r) for r in cursor.fetchall()]
-
-    return jsonify({'users': users, 'products': products, 'posts': posts, 'groups': groups})
-
-# ======================================================================
-# NOTIFICATIONS & FOLLOW API
-# ======================================================================
-@app.route('/api/notifications', methods=['GET', 'POST'])
-def handle_notifications():
-    if 'user_id' not in session:
-        return jsonify([])
-    db = get_db()
-    cursor = db.cursor()
-    p = query_param()
-    uid = session['user_id']
-
-    if request.method == 'POST':
-        cursor.execute(f"UPDATE notifications SET is_read = 1 WHERE user_id = {p}", (uid,))
-        db.commit()
-        return jsonify({'success': True})
-
-    cursor.execute(f'''
-        SELECT n.*, u.username AS sender_username, u.avatar_url AS sender_avatar
-        FROM notifications n
-        LEFT JOIN users u ON n.sender_id = u.id
-        WHERE n.user_id = {p} ORDER BY n.id DESC LIMIT 30
-    ''', (uid,))
-    return jsonify([dict(r) for r in cursor.fetchall()])
-
-@app.route('/api/users/<username>/follow', methods=['POST'])
-def toggle_follow(username):
-    if 'user_id' not in session:
-        return jsonify({'success': False, 'message': 'Login required.'}), 401
-    db = get_db()
-    cursor = db.cursor()
-    p = query_param()
-    uid = session['user_id']
-
-    cursor.execute(f"SELECT id, full_name FROM users WHERE LOWER(username) = {p}", (username.lower(),))
-    target = cursor.fetchone()
-    if not target or target['id'] == uid:
-        return jsonify({'success': False, 'message': 'Invalid operation.'}), 400
-
-    target_id = target['id']
-    cursor.execute(f"SELECT id FROM followers WHERE follower_id = {p} AND followed_id = {p}", (uid, target_id))
-    existing = cursor.fetchone()
-
-    if existing:
-        cursor.execute(f"DELETE FROM followers WHERE id = {p}", (existing['id'],))
-        following = False
-        msg = f"Unfollowed {target['full_name']}"
-    else:
-        cursor.execute(f"INSERT INTO followers (follower_id, followed_id) VALUES ({p}, {p})", (uid, target_id))
-        following = True
-        msg = f"Now following {target['full_name']}!"
-        add_notification(target_id, uid, 'follow', uid, f"{session['full_name']} started following you!")
-
-    db.commit()
-    return jsonify({'success': True, 'following': following, 'message': msg})
-
-# ======================================================================
-# GROUPS API
-# ======================================================================
-@app.route('/api/groups', methods=['GET', 'POST'])
-def handle_groups():
+@app.route('/api/pages', methods=['GET', 'POST'])
+def handle_pages():
     db = get_db()
     cursor = db.cursor()
     p = query_param()
@@ -803,14 +686,14 @@ def handle_groups():
         cover = data.get('cover_url', '').strip()
 
         if not name:
-            return jsonify({'success': False, 'message': 'Group name required.'}), 400
+            return jsonify({'success': False, 'message': 'Page name required.'}), 400
 
         cursor.execute(f'''INSERT INTO groups (user_id, name, description, category, avatar_url, cover_url)
         VALUES ({p}, {p}, {p}, 'Community', {p}, {p})''', (session['user_id'], name, desc, avatar, cover))
-        group_id = cursor.lastrowid or 0
-        cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (group_id, session['user_id']))
+        page_id = cursor.lastrowid or 0
+        cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (page_id, session['user_id']))
         db.commit()
-        return jsonify({'success': True, 'message': f'Group "{name}" created successfully!'})
+        return jsonify({'success': True, 'message': f'Page "{name}" created successfully!'})
 
     cursor.execute(f'''
         SELECT g.*, COUNT(gm.id) AS member_count
@@ -819,8 +702,8 @@ def handle_groups():
     ''')
     return jsonify([dict(r) for r in cursor.fetchall()])
 
-@app.route('/api/groups/<int:group_id>', methods=['GET'])
-def get_group_detail(group_id):
+@app.route('/api/pages/<int:page_id>', methods=['GET'])
+def get_page_detail(page_id):
     db = get_db()
     cursor = db.cursor()
     p = query_param()
@@ -833,17 +716,17 @@ def get_group_detail(group_id):
         FROM groups g
         JOIN users u ON g.user_id = u.id
         WHERE g.id = {p}
-    ''', (uid, group_id))
-    group = cursor.fetchone()
-    if not group:
-        return jsonify({'success': False, 'message': 'Group not found.'}), 404
+    ''', (uid, page_id))
+    page = cursor.fetchone()
+    if not page:
+        return jsonify({'success': False, 'message': 'Page not found.'}), 404
 
-    res = dict(group)
-    res['is_creator'] = (uid == group['user_id'])
-    return jsonify({'success': True, 'group': res})
+    res = dict(page)
+    res['is_creator'] = (uid == page['user_id'])
+    return jsonify({'success': True, 'page': res})
 
-@app.route('/api/groups/<int:group_id>/update', methods=['POST'])
-def update_group(group_id):
+@app.route('/api/pages/<int:page_id>/update', methods=['POST'])
+def update_page(page_id):
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Login required.'}), 401
     db = get_db()
@@ -851,10 +734,10 @@ def update_group(group_id):
     p = query_param()
     uid = session['user_id']
 
-    cursor.execute(f"SELECT user_id FROM groups WHERE id = {p}", (group_id,))
+    cursor.execute(f"SELECT user_id FROM groups WHERE id = {p}", (page_id,))
     g_row = cursor.fetchone()
     if not g_row or g_row['user_id'] != uid:
-        return jsonify({'success': False, 'message': 'Only the group creator can update details.'}), 403
+        return jsonify({'success': False, 'message': 'Only the page creator can update page details.'}), 403
 
     data = request.json or {}
     name = data.get('name', '').strip()
@@ -878,14 +761,14 @@ def update_group(group_id):
         params.append(cover_url)
 
     if updates:
-        params.append(group_id)
+        params.append(page_id)
         cursor.execute(f"UPDATE groups SET {', '.join(updates)} WHERE id = {p}", tuple(params))
         db.commit()
 
-    return jsonify({'success': True, 'message': 'Group updated successfully!'})
+    return jsonify({'success': True, 'message': 'Page updated successfully!'})
 
-@app.route('/api/groups/<int:group_id>/join', methods=['POST'])
-def join_group(group_id):
+@app.route('/api/pages/<int:page_id>/join', methods=['POST'])
+def join_page(page_id):
     if 'user_id' not in session:
         return jsonify({'success': False, 'message': 'Login required.'}), 401
     db = get_db()
@@ -893,15 +776,15 @@ def join_group(group_id):
     p = query_param()
     uid = session['user_id']
 
-    cursor.execute(f"SELECT id FROM group_members WHERE group_id = {p} AND user_id = {p}", (group_id, uid))
+    cursor.execute(f"SELECT id FROM group_members WHERE group_id = {p} AND user_id = {p}", (page_id, uid))
     if cursor.fetchone():
-        cursor.execute(f"DELETE FROM group_members WHERE group_id = {p} AND user_id = {p}", (group_id, uid))
+        cursor.execute(f"DELETE FROM group_members WHERE group_id = {p} AND user_id = {p}", (page_id, uid))
         db.commit()
-        return jsonify({'success': True, 'joined': False, 'message': 'Left group.'})
+        return jsonify({'success': True, 'joined': False, 'message': 'Unfollowed page.'})
     else:
-        cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (group_id, uid))
+        cursor.execute(f"INSERT INTO group_members (group_id, user_id) VALUES ({p}, {p})", (page_id, uid))
         db.commit()
-        return jsonify({'success': True, 'joined': True, 'message': 'Joined group!'})
+        return jsonify({'success': True, 'joined': True, 'message': 'Following page!'})
 
 # ======================================================================
 # EVENTS API
@@ -1128,7 +1011,7 @@ def send_wink():
         return jsonify({'success': False, 'message': 'Already sent a wink to this member.'})
 
 # ======================================================================
-# SOCIAL FEED & GROUP FEED INTEGRATION (CROSS-POSTING & COMMENTS)
+# SOCIAL FEED & PAGE FEED INTEGRATION
 # ======================================================================
 @app.route('/api/posts', methods=['GET', 'POST'])
 def handle_posts():
@@ -1176,7 +1059,6 @@ def handle_posts():
     post_type_filter = request.args.get('type', 'Social')
     group_filter = int(request.args.get('group_id') or 0)
 
-    # GROUP POSTS CROSS-POST TO MAIN FEED
     if group_filter > 0:
         cursor.execute(f'''
             SELECT p.id, p.user_id, p.group_id, p.content, p.post_type, p.image_url, p.video_url, p.created_at,
@@ -1426,22 +1308,7 @@ def chat_partners():
             'unread': unread
         })
 
-    friends = []
-    try:
-        cursor.execute(f'''
-            SELECT DISTINCT u.id, u.full_name, u.username, u.avatar_url, u.user_type
-            FROM users u
-            JOIN followers f ON (f.follower_id = {p} AND f.followed_id = u.id) OR (f.followed_id = {p} AND f.follower_id = u.id)
-            WHERE u.id != {p} LIMIT 15
-        ''', (uid, uid, uid))
-        all_friends = cursor.fetchall()
-        for f in all_friends:
-            if f['id'] not in chatted_ids:
-                friends.append(dict(f))
-    except Exception:
-        friends = []
-
-    return jsonify({'success': True, 'partners': partners, 'friends': friends})
+    return jsonify({'success': True, 'partners': partners})
 
 @app.route('/api/chat/<username>', methods=['GET', 'POST'])
 def chat_thread(username):
@@ -1487,7 +1354,7 @@ def chat_thread(username):
     return jsonify({'success': True, 'other': dict(other), 'messages': messages, 'me_id': uid})
 
 # ======================================================================
-# ADMIN API
+# ROBUST ADMIN API (MONITOR ALL INCOME & WALLETS)
 # ======================================================================
 @app.route('/api/admin/overview', methods=['GET'])
 def get_admin_overview():
@@ -1510,7 +1377,7 @@ def get_admin_overview():
     total_posts = cursor.fetchone()[0]
 
     cursor.execute("SELECT COUNT(*) FROM groups")
-    total_groups = cursor.fetchone()[0]
+    total_pages = cursor.fetchone()[0]
 
     cursor.execute("SELECT COALESCE(SUM(wallet_balance), 0) FROM users")
     total_wallets = float(cursor.fetchone()[0] or 0)
@@ -1518,15 +1385,26 @@ def get_admin_overview():
     cursor.execute("SELECT COUNT(*) FROM partner_requests WHERE status = 'pending'")
     pending_partners = cursor.fetchone()[0]
 
+    cursor.execute("SELECT COALESCE(SUM(amount), 0) FROM partner_requests WHERE status = 'approved'")
+    total_gross_income = float(cursor.fetchone()[0] or 0)
+
+    cursor.execute("SELECT COALESCE(SUM(amount), 0) FROM payout_requests WHERE status = 'approved'")
+    total_approved_payouts = float(cursor.fetchone()[0] or 0)
+
+    admin_net_balance = total_gross_income - total_approved_payouts
+
     return jsonify({
         'success': True,
         'total_users': total_users,
         'total_partners': total_partners,
         'total_products': total_products,
         'total_posts': total_posts,
-        'total_groups': total_groups,
+        'total_pages': total_pages,
         'total_partner_wallets': total_wallets,
-        'pending_partners': pending_partners
+        'pending_partners': pending_partners,
+        'total_gross_income': total_gross_income,
+        'total_approved_payouts': total_approved_payouts,
+        'admin_net_balance': admin_net_balance
     })
 
 @app.route('/api/admin/posts', methods=['GET', 'DELETE'])
@@ -1581,7 +1459,7 @@ def admin_manage_users():
         db.commit()
         return jsonify({'success': True, 'message': 'Member removed.'})
 
-    cursor.execute("SELECT id, full_name, username, phone, user_type FROM users ORDER BY id DESC")
+    cursor.execute("SELECT id, full_name, username, phone, user_type, wallet_balance FROM users ORDER BY id DESC")
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 @app.route('/api/admin/partner-requests', methods=['GET', 'POST'])
@@ -1761,8 +1639,8 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 </header>
 
 <div class="top-nav-pills">
-  <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-house"></i> Feed</div>
-  <div class="nav-pill" data-nav="groups" onclick="switchNav('groups')"><i class="fa-solid fa-users"></i> Groups</div>
+  <div class="nav-pill active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-house"></i> Main Feed</div>
+  <div class="nav-pill" data-nav="pages" onclick="switchNav('pages')"><i class="fa-solid fa-flag"></i> Pages</div>
   <div class="nav-pill" data-nav="events" onclick="switchNav('events')"><i class="fa-solid fa-calendar-days"></i> Events</div>
   <div class="nav-pill" data-nav="market" onclick="switchNav('market')"><i class="fa-solid fa-store"></i> Market</div>
   <div class="nav-pill" data-nav="beauty" onclick="switchNav('beauty')"><i class="fa-solid fa-scissors"></i> Beauty</div>
@@ -1787,41 +1665,41 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
     <div id="feed-posts-container"></div>
   </div>
 
-  <!-- GROUPS HUB -->
-  <div id="view-groups" class="view-section">
+  <!-- PAGES HUB -->
+  <div id="view-pages" class="view-section">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
-      <h3 style="font-size:1.1rem;font-weight:800;color:var(--navy-blue);">Community Groups</h3>
-      <button onclick="openGroupCreateModal()" class="btn-submit" style="width:auto;padding:8px 16px;">+ Create Group</button>
+      <h3 style="font-size:1.1rem;font-weight:800;color:var(--navy-blue);">Facebook Pages</h3>
+      <button onclick="openPageCreateModal()" class="btn-submit" style="width:auto;padding:8px 16px;">+ Create Page</button>
     </div>
-    <div id="groups-container"></div>
+    <div id="pages-container"></div>
   </div>
 
-  <!-- GROUP DETAIL PAGE -->
-  <div id="view-group-detail" class="view-section">
-    <button onclick="switchNav('groups')" style="background:#fff;border:1px solid var(--border-light);padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;margin-bottom:8px;">← Back to Groups</button>
+  <!-- PAGE DETAIL VIEW -->
+  <div id="view-page-detail" class="view-section">
+    <button onclick="switchNav('pages')" style="background:#fff;border:1px solid var(--border-light);padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;margin-bottom:8px;">← Back to Pages</button>
 
-    <div id="group-detail-header" class="card"></div>
+    <div id="page-detail-header" class="card"></div>
 
-    <div class="card" id="group-post-composer" style="display:none;">
-      <h4 style="font-size:0.88rem; font-weight:800; margin-bottom:6px;">Post to Group (Shows on Main Feed too)</h4>
-      <form onsubmit="handleGroupPostSubmit(event)">
-        <input type="hidden" id="active-group-id" value="0">
-        <textarea class="form-control" id="group-post-content" rows="2" placeholder="Write something in this group..."></textarea>
+    <div class="card" id="page-post-composer" style="display:none;">
+      <h4 style="font-size:0.88rem; font-weight:800; margin-bottom:6px;">Post to Page (Shows on Main Feed too)</h4>
+      <form onsubmit="handlePagePostSubmit(event)">
+        <input type="hidden" id="active-page-id" value="0">
+        <textarea class="form-control" id="page-post-content" rows="2" placeholder="Write an update on this Page..."></textarea>
         <div style="display:flex;gap:8px;align-items:center;margin:8px 0;">
-          <input type="file" id="group-post-file-input" class="form-control" accept="image/*,video/*" style="padding:4px;">
+          <input type="file" id="page-post-file-input" class="form-control" accept="image/*,video/*" style="padding:4px;">
         </div>
-        <button type="submit" class="btn-submit">Publish Group Post</button>
+        <button type="submit" class="btn-submit">Publish Page Post</button>
       </form>
     </div>
 
-    <div id="group-posts-container"></div>
+    <div id="page-posts-container"></div>
   </div>
 
   <!-- EVENTS VIEW -->
   <div id="view-events" class="view-section">
     <div class="card">
       <div style="display:flex;justify-content:space-between;align-items:center;">
-        <h3 style="font-size:1rem;font-weight:800;">📅 Local Events & Festivals</h3>
+        <h3 style="font-size:1rem;font-weight:800;">📅 Events & Festivals</h3>
         <button onclick="openCreateEventModal()" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.78rem;">+ Create Event</button>
       </div>
     </div>
@@ -1892,6 +1770,63 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 
 </div>
 
+<!-- MULTI-PURPOSE SELL / LISTING MODAL -->
+<div id="sell-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+  <div class="card" style="max-width:440px;width:100%;max-height:90vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+      <h3 style="font-weight:800;color:var(--navy-blue);" id="modal-sell-title">Publish Listing</h3>
+      <button onclick="closeSellModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+    </div>
+    <form onsubmit="handleProductSubmit(event)">
+      <input type="hidden" id="prod-type" value="Market">
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Title</label><input type="text" class="form-control" id="prod-title" required></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Category</label><input type="text" class="form-control" id="prod-category" placeholder="e.g. Electronics, Fashion, Artisans" required></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Price (₦)</label><input type="number" class="form-control" id="prod-price" required></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">WhatsApp Contact</label><input type="text" class="form-control" id="prod-whatsapp" placeholder="e.g. 09018363715" required></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Upload Photo/Video</label><input type="file" id="prod-img-file" class="form-control" accept="image/*,video/*"></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea class="form-control" id="prod-desc" rows="2"></textarea></div>
+      <button type="submit" class="btn-submit">Publish Item</button>
+    </form>
+  </div>
+</div>
+
+<!-- EVENT MODAL -->
+<div id="event-create-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+  <div class="card" style="max-width:440px;width:100%;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+      <h3 style="font-weight:800;color:var(--navy-blue);">Create Event</h3>
+      <button onclick="closeEventModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+    </div>
+    <form onsubmit="handleEventSubmit(event)">
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Event Title</label><input type="text" id="evt-title" class="form-control" required></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Date & Time</label><input type="text" id="evt-date" class="form-control" placeholder="e.g. Saturday, Oct 25 at 4:00 PM"></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Location</label><input type="text" id="evt-location" class="form-control" placeholder="e.g. Ijebu Imusin"></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Event Banner</label><input type="file" id="evt-image-file" class="form-control" accept="image/*"></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea id="evt-desc" class="form-control" rows="2"></textarea></div>
+      <button type="submit" class="btn-submit">Publish Event</button>
+    </form>
+  </div>
+</div>
+
+<!-- DATING SETTINGS MODAL -->
+<div id="dating-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+  <div class="card" style="max-width:420px;width:100%;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+      <h3 style="font-weight:800;color:var(--navy-blue);">❤️ Dating Profile Settings</h3>
+      <button onclick="closeDatingModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+    </div>
+    <form onsubmit="handleDatingProfileSubmit(event)">
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Age</label><input type="number" id="dt-age" class="form-control" value="24" required></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Gender</label><select id="dt-gender" class="form-control"><option value="Female">Female</option><option value="Male">Male</option></select></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Looking For</label><select id="dt-intent" class="form-control"><option value="Dating & Relationship">Dating & Relationship</option><option value="Marriage">Marriage</option><option value="Networking & Friends">Networking & Friends</option></select></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Occupation</label><input type="text" id="dt-occupation" class="form-control"></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Bio</label><textarea id="dt-bio" class="form-control" rows="2"></textarea></div>
+      <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;"><input type="checkbox" id="dt-active" checked><label for="dt-active" style="font-size:0.8rem;">Show on Dating Feed</label></div>
+      <button type="submit" class="btn-submit">Save Dating Profile</button>
+    </form>
+  </div>
+</div>
+
 <!-- EDIT PROFILE MODAL -->
 <div id="edit-profile-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
   <div class="card" style="max-width:440px;width:100%;max-height:90vh;overflow-y:auto;">
@@ -1939,39 +1874,39 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
   </div>
 </div>
 
-<!-- CREATE/EDIT GROUP MODAL -->
-<div id="group-create-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+<!-- CREATE/EDIT PAGE MODAL -->
+<div id="page-create-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
   <div class="card" style="max-width:440px;width:100%;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
-      <h3 style="font-weight:800;" id="group-modal-title">Create Group</h3>
-      <button onclick="closeGroupModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+      <h3 style="font-weight:800;" id="page-modal-title">Create Page</h3>
+      <button onclick="closePageModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
     </div>
-    <form onsubmit="handleGroupSubmit(event)">
-      <input type="hidden" id="edit-group-id" value="0">
-      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Group Name</label><input type="text" id="grp-name" class="form-control" required></div>
-      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Group Profile Photo (Avatar)</label><input type="file" id="grp-avatar-file" class="form-control" accept="image/*"></div>
-      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Group Cover Banner</label><input type="file" id="grp-cover-file" class="form-control" accept="image/*"></div>
-      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea id="grp-desc" class="form-control" rows="2"></textarea></div>
-      <button type="submit" class="btn-submit">Save Group Details</button>
+    <form onsubmit="handlePageSubmit(event)">
+      <input type="hidden" id="edit-page-id" value="0">
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Page Name</label><input type="text" id="page-name" class="form-control" required></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Page Profile Photo (Avatar)</label><input type="file" id="page-avatar-file" class="form-control" accept="image/*"></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Page Cover Banner</label><input type="file" id="page-cover-file" class="form-control" accept="image/*"></div>
+      <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea id="page-desc" class="form-control" rows="2"></textarea></div>
+      <button type="submit" class="btn-submit">Save Page Details</button>
     </form>
   </div>
 </div>
 
 <footer class="app-footer">
   <p><strong>{{ company_name }}</strong> &copy; 2026. All Rights Reserved.</p>
-  <p><i class="fa-solid fa-envelope"></i> Email: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></p>
+  <p><i class="fa-solid fa-phone"></i> Phone: <strong>09018363715</strong> | <i class="fa-solid fa-envelope"></i> Email: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></p>
 </footer>
 
 <div class="mobile-bottom-nav">
   <div class="nav-item active" data-nav="feed" onclick="switchNav('feed')"><i class="fa-solid fa-house"></i> Feed</div>
-  <div class="nav-item" data-nav="groups" onclick="switchNav('groups')"><i class="fa-solid fa-users"></i> Groups</div>
+  <div class="nav-item" data-nav="pages" onclick="switchNav('pages')"><i class="fa-solid fa-flag"></i> Pages</div>
   <div class="nav-item" data-nav="market" onclick="switchNav('market')"><i class="fa-solid fa-store"></i> Market</div>
   <div class="nav-item" data-nav="chat" onclick="switchNav('chat')"><i class="fa-solid fa-comments"></i> Chat</div>
 </div>
 
 <script>
 let currentUser = null;
-let activeGroupId = 0;
+let activePageId = 0;
 let replyParentCommentId = 0;
 
 function showToast(msg, type = 'success') {
@@ -1995,7 +1930,7 @@ function switchNav(target) {
   if(view) view.classList.add('active');
 
   if(target === 'feed') loadPosts('Social', 'feed-posts-container');
-  if(target === 'groups') loadGroups();
+  if(target === 'pages') loadPages();
   if(target === 'events') loadEventsFeed();
   if(target === 'market') loadCategoryListings('Market', 'products-container');
   if(target === 'beauty') loadCategoryListings('Beauty', 'beauty-container');
@@ -2026,6 +1961,175 @@ function renderHeaderAuth() {
   } else {
     box.innerHTML = `<a href="/auth" style="background:var(--fb-blue);color:#fff;text-decoration:none;padding:6px 12px;border-radius:16px;font-weight:700;font-size:0.75rem;">Sign In</a>`;
   }
+}
+
+/* LISTING MODAL LOGIC FOR MARKET, BEAUTY, JOBS */
+function startSellItem(type = 'Market') {
+  if(!currentUser) return window.location.href = '/auth';
+  document.getElementById('prod-type').value = type;
+  document.getElementById('modal-sell-title').innerText = type === 'Market' ? 'Publish Marketplace Item' : (type === 'Beauty' ? 'Add Beauty & Fashion Service' : 'Post Job / Skill Listing');
+  document.getElementById('sell-modal').style.display = 'flex';
+}
+function closeSellModal() { document.getElementById('sell-modal').style.display = 'none'; }
+
+async function handleProductSubmit(e) {
+  e.preventDefault();
+  const type = document.getElementById('prod-type').value;
+  const fileInput = document.getElementById('prod-img-file');
+  let uploadedImg = '', uploadedVid = '';
+
+  if(fileInput && fileInput.files[0]) {
+    const upload = await uploadSelectedFile(fileInput);
+    if(upload.is_video) uploadedVid = upload.url;
+    else uploadedImg = upload.url;
+  }
+
+  const res = await fetch('/api/products', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({
+      title: document.getElementById('prod-title').value,
+      category: document.getElementById('prod-category').value,
+      price: document.getElementById('prod-price').value,
+      whatsapp_number: document.getElementById('prod-whatsapp').value,
+      description: document.getElementById('prod-desc').value,
+      listing_type: type,
+      image_url: uploadedImg,
+      video_url: uploadedVid
+    })
+  });
+  const data = await res.json();
+  showToast(data.message);
+  if(data.success) {
+    closeSellModal();
+    if(type === 'Market') loadCategoryListings('Market', 'products-container');
+    if(type === 'Beauty') loadCategoryListings('Beauty', 'beauty-container');
+    if(type === 'Jobs') loadCategoryListings('Jobs', 'jobs-container');
+  } else if(data.requires_upgrade) {
+    closeSellModal();
+    document.getElementById('cpn-upgrade-modal').style.display = 'flex';
+  }
+}
+
+async function loadCategoryListings(type, containerId) {
+  const res = await fetch(`/api/products?type=${type}`);
+  const items = await res.json();
+  const c = document.getElementById(containerId);
+  if(!items.length) { c.innerHTML = '<div style="text-align:center;padding:1rem;">No listings found.</div>'; return; }
+
+  c.innerHTML = items.map(p => `
+    <div style="border-bottom:1px solid var(--border-light);padding-bottom:10px;margin-bottom:10px;display:flex;gap:10px;align-items:center;">
+      ${p.image_url ? `<img src="${p.image_url}" style="width:70px;height:70px;border-radius:8px;object-fit:cover;">` : `<div style="width:70px;height:70px;background:#f0f2f5;border-radius:8px;display:flex;align-items:center;justify-content:center;"><i class="fa-solid fa-store"></i></div>`}
+      <div style="flex:1;">
+        <h4 style="font-weight:800;font-size:0.9rem;">${p.title}</h4>
+        <div style="color:var(--emerald-green);font-weight:800;font-size:0.85rem;">₦${p.price.toLocaleString()}</div>
+        <div style="font-size:0.72rem;color:var(--text-muted);">${p.category} • @${p.seller_username}</div>
+      </div>
+      <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" style="background:#25d366;color:#fff;padding:6px 10px;border-radius:6px;font-size:0.75rem;text-decoration:none;font-weight:700;"><i class="fa-brands fa-whatsapp"></i> Chat</a>
+    </div>
+  `).join('');
+}
+
+/* EVENT MODAL LOGIC */
+function openCreateEventModal() { document.getElementById('event-create-modal').style.display = 'flex'; }
+function closeEventModal() { document.getElementById('event-create-modal').style.display = 'none'; }
+
+async function handleEventSubmit(e) {
+  e.preventDefault();
+  const imgInput = document.getElementById('evt-image-file');
+  let imgUrl = '';
+  if(imgInput && imgInput.files[0]) imgUrl = (await uploadSelectedFile(imgInput)).url;
+
+  const res = await fetch('/api/events', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      title: document.getElementById('evt-title').value,
+      event_date: document.getElementById('evt-date').value,
+      location: document.getElementById('evt-location').value,
+      description: document.getElementById('evt-desc').value,
+      image_url: imgUrl,
+      group_id: activePageId
+    })
+  });
+  const data = await res.json();
+  showToast(data.message);
+  if(data.success) {
+    closeEventModal();
+    loadEventsFeed();
+  }
+}
+
+async function loadEventsFeed() {
+  const res = await fetch('/api/events');
+  const events = await res.json();
+  const c = document.getElementById('events-feed-container');
+  if(!events.length) { c.innerHTML = '<div class="card">No events listed right now.</div>'; return; }
+
+  c.innerHTML = events.map(e => `
+    <div class="card">
+      ${e.image_url ? `<img src="${e.image_url}" style="width:100%;border-radius:8px;max-height:180px;object-fit:cover;margin-bottom:8px;">` : ''}
+      <h4 style="font-weight:800;font-size:0.98rem;color:var(--navy-blue);">${e.title}</h4>
+      <p style="font-size:0.78rem;color:var(--emerald-green);font-weight:700;">📅 ${e.event_date || 'Upcoming'} • 📍 ${e.location || 'Ijebu'}</p>
+      <p style="font-size:0.82rem;margin-top:4px;">${e.description}</p>
+    </div>
+  `).join('');
+}
+
+/* DATING LOGIC */
+function openDatingSettingsModal() {
+  if(!currentUser) return window.location.href = '/auth';
+  document.getElementById('dating-modal').style.display = 'flex';
+}
+function closeDatingModal() { document.getElementById('dating-modal').style.display = 'none'; }
+
+async function handleDatingProfileSubmit(e) {
+  e.preventDefault();
+  const res = await fetch('/api/dating/profile', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({
+      age: document.getElementById('dt-age').value,
+      gender: document.getElementById('dt-gender').value,
+      relationship_intent: document.getElementById('dt-intent').value,
+      occupation: document.getElementById('dt-occupation').value,
+      bio: document.getElementById('dt-bio').value,
+      is_dating_active: document.getElementById('dt-active').checked
+    })
+  });
+  const data = await res.json();
+  showToast(data.message);
+  if(data.success) { closeDatingModal(); loadDatingMatches(); }
+}
+
+async function loadDatingMatches() {
+  const res = await fetch('/api/dating/matches');
+  const matches = await res.json();
+  const container = document.getElementById('dating-matches-container');
+  if(!matches.length) { container.innerHTML = '<div class="card">No active singles on feed yet.</div>'; return; }
+
+  container.innerHTML = matches.map(m => `
+    <div class="card" style="display:flex;gap:10px;align-items:center;">
+      <div class="avatar" style="width:48px;height:48px;background:var(--fb-blue);">${m.avatar_url ? `<img src="${m.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : m.full_name.charAt(0)}</div>
+      <div style="flex:1;">
+        <h4 style="font-weight:800;font-size:0.88rem;">${m.full_name}, ${m.age}</h4>
+        <div style="font-size:0.72rem;color:var(--emerald-green);font-weight:700;">${m.relationship_intent} • ${m.gender}</div>
+        <div style="font-size:0.78rem;color:var(--text-muted);">"${m.bio || 'Living in Ijebu'}"</div>
+      </div>
+      <button onclick="sendWink(${m.id})" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.75rem;">Wink 👋</button>
+    </div>
+  `).join('');
+}
+
+async function sendWink(receiverId) {
+  if(!currentUser) return window.location.href = '/auth';
+  const res = await fetch('/api/dating/wink', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({receiver_id: receiverId})
+  });
+  const data = await res.json();
+  showToast(data.message);
 }
 
 /* MEMBER PROFILE ENGINE */
@@ -2135,53 +2239,53 @@ async function handleClaimBankTransfer(e) {
   if(data.success) closeCPNModal();
 }
 
-/* GROUPS & FACEBOOK STYLE LOGIC */
-async function loadGroups() {
-  const res = await fetch('/api/groups');
-  const groups = await res.json();
-  const c = document.getElementById('groups-container');
-  if(!groups.length) { c.innerHTML = '<div class="card">No groups created yet. Click "+ Create Group" to start one!</div>'; return; }
+/* PAGES LOGIC */
+async function loadPages() {
+  const res = await fetch('/api/pages');
+  const pages = await res.json();
+  const c = document.getElementById('pages-container');
+  if(!pages.length) { c.innerHTML = '<div class="card">No pages created yet. Click "+ Create Page" to start one!</div>'; return; }
 
-  c.innerHTML = groups.map(g => `
+  c.innerHTML = pages.map(g => `
     <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
-      <div style="display:flex;align-items:center;gap:12px;cursor:pointer;" onclick="openGroupDetail(${g.id})">
-        ${g.avatar_url ? `<img src="${g.avatar_url}" style="width:50px;height:50px;border-radius:12px;object-fit:cover;">` : `<div class="avatar" style="width:50px;height:50px;border-radius:12px;background:var(--fb-blue);"><i class="fa-solid fa-users"></i></div>`}
+      <div style="display:flex;align-items:center;gap:12px;cursor:pointer;" onclick="openPageDetail(${g.id})">
+        ${g.avatar_url ? `<img src="${g.avatar_url}" style="width:50px;height:50px;border-radius:12px;object-fit:cover;">` : `<div class="avatar" style="width:50px;height:50px;border-radius:12px;background:var(--fb-blue);"><i class="fa-solid fa-flag"></i></div>`}
         <div>
           <h4 style="font-weight:800;font-size:0.95rem;color:var(--navy-blue);">${g.name}</h4>
-          <p style="font-size:0.75rem;color:var(--text-muted);">${g.member_count} Members</p>
+          <p style="font-size:0.75rem;color:var(--text-muted);">${g.member_count} Followers</p>
         </div>
       </div>
-      <button onclick="openGroupDetail(${g.id})" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.75rem;">Visit Group</button>
+      <button onclick="openPageDetail(${g.id})" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.75rem;">Visit Page</button>
     </div>
   `).join('');
 }
 
-async function openGroupDetail(groupId) {
-  activeGroupId = groupId;
-  switchNav('group-detail');
-  const res = await fetch(`/api/groups/${groupId}`);
+async function openPageDetail(pageId) {
+  activePageId = pageId;
+  switchNav('page-detail');
+  const res = await fetch(`/api/pages/${pageId}`);
   const data = await res.json();
   if(!data.success) return showToast(data.message, 'error');
 
-  const g = data.group;
-  document.getElementById('active-group-id').value = g.id;
+  const g = data.page;
+  document.getElementById('active-page-id').value = g.id;
 
   const coverBg = g.cover_url ? `style="background-image:url('${g.cover_url}')"` : '';
-  const avatarHtml = g.avatar_url ? `<img src="${g.avatar_url}" style="width:100%;height:100%;object-fit:cover;">` : `<i class="fa-solid fa-users"></i>`;
+  const avatarHtml = g.avatar_url ? `<img src="${g.avatar_url}" style="width:100%;height:100%;object-fit:cover;">` : `<i class="fa-solid fa-flag"></i>`;
 
-  document.getElementById('group-detail-header').innerHTML = `
+  document.getElementById('page-detail-header').innerHTML = `
     <div class="fb-group-banner" ${coverBg}>
       <div class="fb-group-avatar">${avatarHtml}</div>
     </div>
     <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:10px;">
       <div>
         <h2 style="font-size:1.2rem;font-weight:800;">${g.name}</h2>
-        <p style="font-size:0.78rem;color:var(--text-muted);">${g.member_count} Members</p>
+        <p style="font-size:0.78rem;color:var(--text-muted);">${g.member_count} Followers</p>
       </div>
       <div>
-        ${g.is_creator ? `<button onclick="openGroupEditModal(${g.id}, '${g.name.replace(/'/g, "\\'")}', '${(g.description||'').replace(/'/g, "\\'")}')" class="btn-group-edit"><i class="fa-solid fa-pen-to-square"></i> Edit Group Details</button>` : ''}
-        <button onclick="joinGroup(${g.id})" class="btn-submit" style="width:auto;padding:8px 14px;font-size:0.8rem;background:${g.is_member ? '#ef4444' : 'var(--fb-blue)'};">
-          ${g.is_member ? 'Leave Group' : 'Join Group'}
+        ${g.is_creator ? `<button onclick="openPageEditModal(${g.id}, '${g.name.replace(/'/g, "\\'")}', '${(g.description||'').replace(/'/g, "\\'")}')" class="btn-group-edit"><i class="fa-solid fa-pen-to-square"></i> Edit Page Details</button>` : ''}
+        <button onclick="joinPage(${g.id})" class="btn-submit" style="width:auto;padding:8px 14px;font-size:0.8rem;background:${g.is_member ? '#ef4444' : 'var(--fb-blue)'};">
+          ${g.is_member ? 'Unfollow Page' : 'Follow Page'}
         </button>
       </div>
     </div>
@@ -2189,31 +2293,31 @@ async function openGroupDetail(groupId) {
   `;
 
   if(g.is_member) {
-    document.getElementById('group-post-composer').style.display = 'block';
+    document.getElementById('page-post-composer').style.display = 'block';
   } else {
-    document.getElementById('group-post-composer').style.display = 'none';
+    document.getElementById('page-post-composer').style.display = 'none';
   }
 
-  loadPosts('Social', 'group-posts-container', g.id);
+  loadPosts('Social', 'page-posts-container', g.id);
 }
 
-function openGroupCreateModal() {
-  document.getElementById('edit-group-id').value = "0";
-  document.getElementById('group-modal-title').innerText = "Create Group";
-  document.getElementById('grp-name').value = "";
-  document.getElementById('grp-desc').value = "";
-  document.getElementById('group-create-modal').style.display = 'flex';
+function openPageCreateModal() {
+  document.getElementById('edit-page-id').value = "0";
+  document.getElementById('page-modal-title').innerText = "Create Page";
+  document.getElementById('page-name').value = "";
+  document.getElementById('page-desc').value = "";
+  document.getElementById('page-create-modal').style.display = 'flex';
 }
 
-function openGroupEditModal(gid, name, desc) {
-  document.getElementById('edit-group-id').value = gid;
-  document.getElementById('group-modal-title').innerText = "Edit Group Details";
-  document.getElementById('grp-name').value = name;
-  document.getElementById('grp-desc').value = desc;
-  document.getElementById('group-create-modal').style.display = 'flex';
+function openPageEditModal(gid, name, desc) {
+  document.getElementById('edit-page-id').value = gid;
+  document.getElementById('page-modal-title').innerText = "Edit Page Details";
+  document.getElementById('page-name').value = name;
+  document.getElementById('page-desc').value = desc;
+  document.getElementById('page-create-modal').style.display = 'flex';
 }
 
-function closeGroupModal() { document.getElementById('group-create-modal').style.display = 'none'; }
+function closePageModal() { document.getElementById('page-create-modal').style.display = 'none'; }
 
 async function uploadSelectedFile(fileInput) {
   if(!fileInput || !fileInput.files[0]) return {url:'', is_video: false};
@@ -2224,19 +2328,19 @@ async function uploadSelectedFile(fileInput) {
   return data.success ? {url: data.url, is_video: data.is_video} : {url:'', is_video: false};
 }
 
-async function handleGroupSubmit(e) {
+async function handlePageSubmit(e) {
   e.preventDefault();
-  const name = document.getElementById('grp-name').value.trim();
-  const desc = document.getElementById('grp-desc').value.trim();
-  const avatarInput = document.getElementById('grp-avatar-file');
-  const coverInput = document.getElementById('grp-cover-file');
+  const name = document.getElementById('page-name').value.trim();
+  const desc = document.getElementById('page-desc').value.trim();
+  const avatarInput = document.getElementById('page-avatar-file');
+  const coverInput = document.getElementById('page-cover-file');
 
   let avatarUrl = '', coverUrl = '';
   if(avatarInput && avatarInput.files[0]) avatarUrl = (await uploadSelectedFile(avatarInput)).url;
   if(coverInput && coverInput.files[0]) coverUrl = (await uploadSelectedFile(coverInput)).url;
 
-  const editId = parseInt(document.getElementById('edit-group-id').value);
-  const endpoint = editId > 0 ? `/api/groups/${editId}/update` : '/api/groups';
+  const editId = parseInt(document.getElementById('edit-page-id').value);
+  const endpoint = editId > 0 ? `/api/pages/${editId}/update` : '/api/pages';
 
   const res = await fetch(endpoint, {
     method: 'POST',
@@ -2246,18 +2350,18 @@ async function handleGroupSubmit(e) {
   const data = await res.json();
   showToast(data.message);
   if(data.success) {
-    closeGroupModal();
-    if(editId > 0) openGroupDetail(editId);
-    else loadGroups();
+    closePageModal();
+    if(editId > 0) openPageDetail(editId);
+    else loadPages();
   }
 }
 
-async function joinGroup(groupId) {
+async function joinPage(pageId) {
   if(!currentUser) return window.location.href = '/auth';
-  const res = await fetch(`/api/groups/${groupId}/join`, {method:'POST'});
+  const res = await fetch(`/api/pages/${pageId}/join`, {method:'POST'});
   const data = await res.json();
   showToast(data.message);
-  openGroupDetail(groupId);
+  openPageDetail(pageId);
 }
 
 /* POSTS & COMMENT REPLIES ENGINE */
@@ -2277,7 +2381,7 @@ function renderPostCard(p) {
   if(p.video_url) mediaHtml = `<video src="${p.video_url}" controls style="width:100%;border-radius:8px;margin-top:6px;"></video>`;
   else if(p.image_url) mediaHtml = `<img src="${p.image_url}" loading="lazy" style="width:100%;border-radius:8px;margin-top:6px;">`;
 
-  const groupBadge = p.group_name ? `<span class="group-badge" onclick="openGroupDetail(${p.group_id})"><i class="fa-solid fa-users"></i> ${p.group_name}</span>` : '';
+  const pageBadge = p.group_name ? `<span class="group-badge" onclick="openPageDetail(${p.group_id})"><i class="fa-solid fa-flag"></i> ${p.group_name}</span>` : '';
 
   return `
     <div class="feed-post">
@@ -2289,7 +2393,7 @@ function renderPostCard(p) {
           <div style="font-size:0.85rem;font-weight:800;cursor:pointer;" onclick="openProfile('${p.username}')">${p.full_name}</div>
           <div style="font-size:0.7rem;color:var(--text-muted);">@${p.username}</div>
         </div>
-        ${groupBadge}
+        ${pageBadge}
       </div>
       <div style="font-size:0.88rem;line-height:1.4;">${p.content}</div>
       ${mediaHtml}
@@ -2322,25 +2426,24 @@ async function handlePostSubmit(e, postType) {
     body: JSON.stringify({content, image_url: imageUrl, video_url: videoUrl, post_type: postType, group_id: 0})
   });
   const data = await res.json();
+  showToast(data.message);
   if(data.success) {
-    showToast(data.message);
     document.getElementById('post-content').value = '';
     loadPosts(postType, 'feed-posts-container');
-  } else {
-    showToast(data.message, 'error');
-    if(data.requires_upgrade) document.getElementById('cpn-upgrade-modal').style.display = 'flex';
+  } else if(data.requires_upgrade) {
+    document.getElementById('cpn-upgrade-modal').style.display = 'flex';
   }
 }
 
-async function handleGroupPostSubmit(e) {
+async function handlePagePostSubmit(e) {
   e.preventDefault();
   if(!currentUser) return window.location.href = '/auth';
-  const groupId = parseInt(document.getElementById('active-group-id').value);
-  const content = document.getElementById('group-post-content').value.trim();
+  const pageId = parseInt(document.getElementById('active-page-id').value);
+  const content = document.getElementById('page-post-content').value.trim();
   if(!content) return showToast('Please enter post text', 'error');
 
   let imageUrl = '', videoUrl = '';
-  const fileInput = document.getElementById('group-post-file-input');
+  const fileInput = document.getElementById('page-post-file-input');
   if(fileInput && fileInput.files[0]) {
     const upload = await uploadSelectedFile(fileInput);
     if(upload.is_video) videoUrl = upload.url;
@@ -2350,20 +2453,20 @@ async function handleGroupPostSubmit(e) {
   const res = await fetch('/api/posts', {
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({content, image_url: imageUrl, video_url: videoUrl, post_type: 'Social', group_id: groupId})
+    body: JSON.stringify({content, image_url: imageUrl, video_url: videoUrl, post_type: 'Social', group_id: pageId})
   });
   const data = await res.json();
   showToast(data.message);
   if(data.success) {
-    document.getElementById('group-post-content').value = '';
-    loadPosts('Social', 'group-posts-container', groupId);
+    document.getElementById('page-post-content').value = '';
+    loadPosts('Social', 'page-posts-container', pageId);
   }
 }
 
 async function toggleLike(pid) {
   if(!currentUser) return window.location.href = '/auth';
   await fetch(`/api/posts/${pid}/like`, {method:'POST'});
-  if(activeGroupId > 0) loadPosts('Social', 'group-posts-container', activeGroupId);
+  if(activePageId > 0) loadPosts('Social', 'page-posts-container', activePageId);
   loadPosts('Social', 'feed-posts-container');
 }
 
@@ -2464,7 +2567,7 @@ body { background: #f0f2f5; color: #0f172a; display: flex; flex-direction: colum
 <body>
 <div class="auth-card">
   <div class="brand">IJEBU CONNECT</div>
-  <p style="font-size:0.78rem;color:#64748b;margin-bottom:12px;">Sign in to join groups, connect, and trade.</p>
+  <p style="font-size:0.78rem;color:#64748b;margin-bottom:12px;">Sign in to join pages and connect.</p>
   <form id="form-login" onsubmit="handleLogin(event)">
     <div class="form-group"><label>Username or Phone</label><input type="text" id="login-uname" class="form-control" required></div>
     <div class="form-group"><label>Password</label><input type="password" id="login-pword" class="form-control" required></div>
@@ -2474,7 +2577,7 @@ body { background: #f0f2f5; color: #0f172a; display: flex; flex-direction: colum
 
 <footer class="app-footer">
   <p><strong>Willys Media World</strong> &copy; 2026</p>
-  <p>willysmediaworld@gmail.com</p>
+  <p>Phone: 09018363715 | willysmediaworld@gmail.com</p>
 </footer>
 
 <script>
@@ -2533,14 +2636,14 @@ th { background:#0b1e36; color:#fff; }
 
 <div class="grid">
   <div class="card"><div class="val" id="st-users">0</div><div class="lbl">Total Members</div></div>
+  <div class="card"><div class="val" id="st-income" style="color:#2563eb;">₦0.00</div><div class="lbl">Total Gross Revenue</div></div>
+  <div class="card"><div class="val" id="st-net" style="color:#059669;">₦0.00</div><div class="lbl">Admin Net Profit</div></div>
   <div class="card"><div class="val" id="st-partners">0</div><div class="lbl">CPN Partners</div></div>
-  <div class="card"><div class="val" id="st-posts">0</div><div class="lbl">Total Posts</div></div>
-  <div class="card"><div class="val" id="st-groups">0</div><div class="lbl">Community Groups</div></div>
-  <div class="card"><div class="val" id="st-wallets">₦0.00</div><div class="lbl">Member Balances</div></div>
+  <div class="card"><div class="val" id="st-wallets">₦0.00</div><div class="lbl">Member Wallet Balances</div></div>
 </div>
 
 <div class="admin-tabs">
-  <button class="admin-tab active" onclick="switchAdminTab('posts')">Manage Posts & Content</button>
+  <button class="admin-tab active" onclick="switchAdminTab('posts')">Manage Posts</button>
   <button class="admin-tab" onclick="switchAdminTab('members')">Manage Members</button>
   <button class="admin-tab" onclick="switchAdminTab('partners')">CPN Claims</button>
   <button class="admin-tab" onclick="switchAdminTab('payouts')">Bank Cashouts</button>
@@ -2550,7 +2653,7 @@ th { background:#0b1e36; color:#fff; }
 <div id="adm-posts" class="tab-sec active">
   <h3>Platform Posts Moderation</h3>
   <table>
-    <thead><tr><th>Author</th><th>Content Preview</th><th>Group / Type</th><th>Action</th></tr></thead>
+    <thead><tr><th>Author</th><th>Content Preview</th><th>Page / Section</th><th>Action</th></tr></thead>
     <tbody id="posts-body"></tbody>
   </table>
 </div>
@@ -2559,7 +2662,7 @@ th { background:#0b1e36; color:#fff; }
 <div id="adm-members" class="tab-sec">
   <h3>Registered Platform Members</h3>
   <table>
-    <thead><tr><th>Full Name</th><th>Username</th><th>Phone</th><th>Type</th><th>Action</th></tr></thead>
+    <thead><tr><th>Full Name</th><th>Username</th><th>Phone</th><th>Type</th><th>Wallet Balance</th><th>Action</th></tr></thead>
     <tbody id="members-body"></tbody>
   </table>
 </div>
@@ -2584,7 +2687,7 @@ th { background:#0b1e36; color:#fff; }
 
 <footer class="app-footer">
   <p><strong>Willys Media World</strong> &copy; 2026 Admin Dashboard</p>
-  <p>willysmediaworld@gmail.com</p>
+  <p>Phone: 09018363715 | willysmediaworld@gmail.com</p>
 </footer>
 
 <script>
@@ -2601,9 +2704,9 @@ async function loadAdminOverview() {
   if(!data.success) { alert('Admin access denied.'); window.location.href='/'; return; }
 
   document.getElementById('st-users').innerText = data.total_users;
+  document.getElementById('st-income').innerText = '₦' + data.total_gross_income.toLocaleString();
+  document.getElementById('st-net').innerText = '₦' + data.admin_net_balance.toLocaleString();
   document.getElementById('st-partners').innerText = data.total_partners;
-  document.getElementById('st-posts').innerText = data.total_posts;
-  document.getElementById('st-groups').innerText = data.total_groups;
   document.getElementById('st-wallets').innerText = '₦' + data.total_partner_wallets.toLocaleString();
 
   loadAdminPosts();
@@ -2622,7 +2725,7 @@ async function loadAdminPosts() {
     <tr>
       <td><b>${p.full_name}</b><br><small>@${p.username}</small></td>
       <td style="max-width:280px;">${p.content}</td>
-      <td><b>${p.group_name ? `Group: ${p.group_name}` : p.post_type}</b></td>
+      <td><b>${p.group_name ? `Page: ${p.group_name}` : p.post_type}</b></td>
       <td><button class="btn-act btn-del" onclick="deleteAdminPost(${p.id})">Delete Post</button></td>
     </tr>
   `).join('');
@@ -2646,6 +2749,7 @@ async function loadMembers() {
       <td>@${u.username}</td>
       <td>${u.phone}</td>
       <td><b>${u.user_type}</b></td>
+      <td><b>₦${(u.wallet_balance || 0).toLocaleString()}</b></td>
       <td>
         ${u.user_type !== 'Admin' ? `<button class="btn-act btn-del" onclick="deleteMember(${u.id})">Delete Member</button>` : 'System Admin'}
       </td>
@@ -2732,7 +2836,7 @@ def index():
         host_url = host_url.replace('http://', 'https://')
 
     meta_title = "Ijebu Connect - Facebook-Style Hub"
-    meta_desc = "Connect with groups, friends, and trade on Ijebu Connect."
+    meta_desc = "Connect with pages, friends, and trade on Ijebu Connect."
     meta_image = f"{host_url.rstrip('/')}/static/uploads/default_preview.jpg"
     meta_url = request.url
 
