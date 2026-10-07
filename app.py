@@ -610,7 +610,6 @@ def get_current_user():
             d['wallet_balance'] = float(d.get('wallet_balance') or 0)
             d['listings_count'] = count_user_listings(d['id'])
 
-            # OPTIMIZED SINGLE-PASS METRICS QUERY FOR FASTER SPEED
             cursor.execute(f'''
                 SELECT 
                     (SELECT COUNT(*) FROM users WHERE referred_by = {p}) AS recruits_count,
@@ -628,6 +627,7 @@ def get_current_user():
 @app.route('/api/auth/logout', methods=['POST'])
 def logout():
     session.clear()
+    logger.info("User session cleared/logged out.")
     return jsonify({'success': True, 'message': 'Logged out successfully.'})
 
 # ======================================================================
@@ -1934,6 +1934,19 @@ function showToast(msg, type = 'success') {
   setTimeout(() => toast.remove(), 3500);
 }
 
+// FORMAT TIMESTAMP FUNCTION FOR POSTS & COMMENTS
+function formatTimestamp(ts) {
+  if (!ts) return '';
+  try {
+    const cleanTs = ts.replace ? ts.replace(' ', 'T') : ts;
+    const d = new Date(cleanTs);
+    if (isNaN(d.getTime())) return ts;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  } catch(e) {
+    return ts;
+  }
+}
+
 function switchNav(target) {
   document.querySelectorAll('.nav-pill').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(p => p.classList.remove('active'));
@@ -1974,10 +1987,22 @@ async function checkSession() {
 function renderHeaderAuth() {
   const box = document.getElementById('header-auth');
   if(currentUser) {
-    box.innerHTML = `<b style="font-size:0.82rem;cursor:pointer;" onclick="openProfile('${currentUser.username}')">@${currentUser.username}</b>`;
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;">
+        <b style="font-size:0.82rem;cursor:pointer;" onclick="openProfile('${currentUser.username}')">@${currentUser.username}</b>
+        <button onclick="handleLogout()" style="background:#ef4444;color:#fff;border:none;padding:5px 10px;border-radius:12px;font-size:0.72rem;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:4px;">
+          <i class="fa-solid fa-right-from-bracket"></i> Logout
+        </button>
+      </div>`;
   } else {
     box.innerHTML = `<a href="/auth" style="background:var(--fb-blue);color:#fff;text-decoration:none;padding:6px 12px;border-radius:16px;font-weight:700;font-size:0.75rem;">Sign In</a>`;
   }
+}
+
+async function handleLogout() {
+  await fetch('/api/auth/logout', { method: 'POST' });
+  currentUser = null;
+  window.location.href = '/auth';
 }
 
 function startSellItem(type = 'Market') {
@@ -2395,7 +2420,7 @@ function renderPostCard(p) {
         </div>
         <div>
           <div style="font-size:0.85rem;font-weight:800;cursor:pointer;" onclick="openProfile('${p.username}')">${p.full_name}</div>
-          <div style="font-size:0.7rem;color:var(--text-muted);">@${p.username}</div>
+          <div style="font-size:0.7rem;color:var(--text-muted);">@${p.username} • ${formatTimestamp(p.created_at)}</div>
         </div>
         ${pageBadge}
       </div>
@@ -2489,7 +2514,8 @@ async function toggleComments(pid) {
       ${comments.map(c => `
         <div class="comment-item ${c.parent_id > 0 ? 'comment-reply-item' : ''}">
           <span style="font-weight:800;">@${c.username}</span> ${c.parent_username ? `<small style="color:var(--fb-blue);">replying to @${c.parent_username}</small>` : ''}: ${c.content}
-          <div style="display:flex;gap:12px;margin-top:2px;font-size:0.75rem;color:var(--text-muted);">
+          <div style="display:flex;gap:12px;align-items:center;margin-top:4px;font-size:0.75rem;color:var(--text-muted);">
+            <span>🕒 ${formatTimestamp(c.created_at)}</span>
             <span onclick="toggleCommentLike(${c.id}, ${pid})" style="cursor:pointer;font-weight:700;">❤️ ${c.likes_count || 0}</span>
             <span onclick="setupReply(${pid}, ${c.id}, '${c.username}')" style="cursor:pointer;font-weight:700;color:var(--fb-blue);">↩️ Reply</span>
           </div>
@@ -2879,3 +2905,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"Starting Ijebu Connect application on port {port}...")
     app.run(host='0.0.0.0', port=port, debug=True)
+    
