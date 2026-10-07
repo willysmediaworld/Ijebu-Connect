@@ -63,7 +63,7 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 def get_system_logos():
-    """Detects and returns logo1 (Auth) and logo2 (Main System)."""
+    """Detects and returns logo1 (AUTH) and logo2 (MAIN SYSTEM)."""
     static_dir = os.path.join(app.root_path, 'static')
     valid_exts = ('.png', '.jpg', '.jpeg', '.webp', '.svg', '.gif')
     found_files = []
@@ -88,7 +88,7 @@ def add_header(response):
     return response
 
 # ======================================================================
-# DATABASE ENGINE (POSTGRES / SQLITE AUTO DETECTOR)
+# DATABASE ENGINE (AUTOMATIC POSTGRES / SQLITE DETECTOR)
 # ======================================================================
 def get_db():
     if 'db' not in g:
@@ -148,7 +148,7 @@ def count_user_listings(user_id):
     ad_post_count = cursor.fetchone()[0]
     return prod_count + ad_post_count
 
-# SEEDING ROUTINE
+# HARDCODED SEEDING
 def seed_hardcoded_data(cursor, db):
     logger.info("Executing persistent seeding...")
     p = query_param()
@@ -433,9 +433,10 @@ def init_db():
 
         safe_add_column(cursor, 'messages', 'is_delivered', 'INTEGER DEFAULT 1')
 
-        # SPEED INDEXES
+        # SPEED OPTIMIZATION INDEXES
         try:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users (LOWER(username))")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_phone ON users (phone)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_user ON posts (user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender_id, receiver_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages (receiver_id, is_read)")
@@ -449,7 +450,7 @@ with app.app_context():
     init_db()
 
 # ======================================================================
-# MEDIA & FILE UPLOADER
+# FILE & MEDIA UPLOADER
 # ======================================================================
 @app.route('/api/upload', methods=['POST'])
 def upload_media():
@@ -457,7 +458,6 @@ def upload_media():
         return jsonify({'success': False, 'message': 'Login required.'}), 401
     if 'file' not in request.files:
         return jsonify({'success': False, 'message': 'No file submitted.'}), 400
-    
     file = request.files['file']
     if file.filename == '':
         return jsonify({'success': False, 'message': 'No file selected.'}), 400
@@ -474,7 +474,7 @@ def upload_media():
     return jsonify({'success': False, 'message': 'Unsupported file format.'}), 400
 
 # ======================================================================
-# GLOBAL SEARCH
+# GLOBAL SEARCH API
 # ======================================================================
 @app.route('/api/search', methods=['GET'])
 def global_search():
@@ -506,7 +506,7 @@ def global_search():
     return jsonify({'success': True, 'users': users, 'pages': pages})
 
 # ======================================================================
-# NOTIFICATIONS API (WITH ENHANCED TARGET DIRECT ROUTING)
+# NOTIFICATIONS API
 # ======================================================================
 @app.route('/api/notifications', methods=['GET'])
 def get_notifications():
@@ -545,7 +545,7 @@ def mark_notifications_read():
     return jsonify({'success': True})
 
 # ======================================================================
-# FOLLOW ENGINE
+# FOLLOW / UNFOLLOW ENGINE
 # ======================================================================
 @app.route('/api/users/<username>/follow', methods=['POST'])
 def toggle_follow_user(username):
@@ -754,7 +754,7 @@ def logout():
     return jsonify({'success': True, 'message': 'Logged out successfully.'})
 
 # ======================================================================
-# PROFILE UPDATE
+# PROFILE UPDATE ENDPOINT
 # ======================================================================
 @app.route('/api/users/profile/update', methods=['POST'])
 def update_user_profile():
@@ -783,7 +783,7 @@ def update_user_profile():
     if phone:
         cursor.execute(f"SELECT id FROM users WHERE phone = {p} AND id != {p}", (phone, uid))
         if cursor.fetchone():
-            return jsonify({'success': False, 'message': 'Phone number already used.'}), 400
+            return jsonify({'success': False, 'message': 'Phone number already used by another account.'}), 400
 
     updates, params = [], []
     if full_name:
@@ -817,10 +817,10 @@ def update_user_profile():
         cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = {p}", tuple(params))
         db.commit()
 
-    return jsonify({'success': True, 'message': 'Profile updated successfully!'})
+    return jsonify({'success': True, 'message': 'All profile details updated successfully!'})
 
 # ======================================================================
-# PAGES & GROUPS API
+# PAGES API (FACEBOOK-STYLE PAGES)
 # ======================================================================
 @app.route('/api/pages', methods=['GET', 'POST'])
 def handle_pages():
@@ -950,10 +950,10 @@ def claim_bank_transfer():
     cursor.execute(f"INSERT INTO partner_requests (user_id, amount, reference_note) VALUES ({p}, 2000.0, {p})",
                    (session['user_id'], note))
     db.commit()
-    return jsonify({'success': True, 'message': 'Payment claim submitted! Admin will verify and activate your CPN status.'})
+    return jsonify({'success': True, 'message': 'Payment claim submitted! Admin will verify and activate your CPN Partner status.'})
 
 # ======================================================================
-# PRODUCTS & MARKETPLACE
+# MULTI-PILLAR PRODUCTS API
 # ======================================================================
 @app.route('/api/products', methods=['GET', 'POST'])
 def handle_products():
@@ -974,7 +974,7 @@ def handle_products():
             if used_listings >= 2:
                 return jsonify({
                     'success': False,
-                    'message': 'You have used your 2 Free Trial Listings! Upgrade to CPN Partner (₦2,000) for unlimited directory listings.',
+                    'message': 'You have used your 2 Free Trial Listings! Upgrade to CPN Partner (₦2,000) for unlimited directory listings and referral earnings.',
                     'requires_upgrade': True
                 }), 403
 
@@ -1172,7 +1172,7 @@ def toggle_post_like(post_id):
         cursor.execute(f"INSERT INTO post_likes (post_id, user_id) VALUES ({p}, {p})", (post_id, uid))
         liked = True
         if post:
-            add_notification(post['user_id'], uid, 'post', post_id, f"{session['full_name']} liked your post.")
+            add_notification(post['user_id'], uid, 'like', post_id, f"{session['full_name']} liked your post.")
 
     db.commit()
     cursor.execute(f"SELECT COUNT(*) FROM post_likes WHERE post_id = {p}", (post_id,))
@@ -1201,7 +1201,7 @@ def handle_comments(post_id):
         cursor.execute(f"SELECT user_id FROM posts WHERE id = {p}", (post_id,))
         post = cursor.fetchone()
         if post:
-            add_notification(post['user_id'], session['user_id'], 'post', post_id, f"{session['full_name']} commented on your post.")
+            add_notification(post['user_id'], session['user_id'], 'comment', post_id, f"{session['full_name']} commented on your post.")
 
         return jsonify({'success': True, 'message': 'Comment posted!'})
 
@@ -1221,7 +1221,7 @@ def handle_comments(post_id):
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 # ======================================================================
-# PUBLIC MEMBER PROFILE
+# PUBLIC MEMBER PROFILE & WALL
 # ======================================================================
 @app.route('/api/users/<username>', methods=['GET'])
 def get_user_profile(username):
@@ -1245,6 +1245,8 @@ def get_user_profile(username):
     recruits_count = cursor.fetchone()[0]
     cursor.execute(f"SELECT COUNT(*) FROM followers WHERE followed_id = {p}", (uid,))
     followers_count = cursor.fetchone()[0]
+    cursor.execute(f"SELECT COUNT(*) FROM followers WHERE follower_id = {p}", (uid,))
+    following_count = cursor.fetchone()[0]
 
     is_following = False
     if current_uid:
@@ -1264,21 +1266,38 @@ def get_user_profile(username):
     ''', (current_uid, uid))
     posts = [dict(r) for r in cursor.fetchall()]
 
+    cursor.execute(f"SELECT * FROM products WHERE user_id = {p} AND status = 'active' ORDER BY id DESC", (uid,))
+    products = [dict(r) for r in cursor.fetchall()]
+
     res = dict(user)
     res['wallet_balance'] = float(res.get('wallet_balance') or 0)
     res['recruits_count'] = recruits_count
     res['followers_count'] = followers_count
+    res['following_count'] = following_count
     res['is_following'] = is_following
     res['posts'] = posts
+    res['products'] = products
     res['posts_count'] = len(posts)
+    res['products_count'] = len(products)
+    res['listings_count'] = count_user_listings(uid)
     return jsonify({'success': True, 'user': res})
 
 # ======================================================================
-# CHAT API (WITH WHATSAPP TICKS & DELIVERY TRACKING)
+# CHAT API (WITH WHATSAPP TICKS)
 # ======================================================================
 def _is_blocked(cursor, p, a, b):
     cursor.execute(f"SELECT 1 FROM blocked_users WHERE blocker_id = {p} AND blocked_id = {p}", (a, b))
     return cursor.fetchone() is not None
+
+@app.route('/api/chat/unread', methods=['GET'])
+def chat_unread():
+    if 'user_id' not in session:
+        return jsonify({'success': True, 'count': 0})
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    cursor.execute(f"SELECT COUNT(*) FROM messages WHERE receiver_id = {p} AND is_read = 0", (session['user_id'],))
+    return jsonify({'success': True, 'count': cursor.fetchone()[0]})
 
 @app.route('/api/chat/partners', methods=['GET'])
 def chat_partners():
@@ -1351,7 +1370,7 @@ def chat_thread(username):
         add_notification(other_id, uid, 'chat', uid, f"{session['full_name']} sent you a message.")
         return jsonify({'success': True, 'message': 'Sent.', 'msg_id': msg_id})
 
-    # Mark received messages as READ when thread opens
+    # Mark messages as READ when thread opens
     cursor.execute(f"UPDATE messages SET is_read = 1 WHERE sender_id = {p} AND receiver_id = {p}", (other_id, uid))
     db.commit()
 
@@ -1377,7 +1396,7 @@ INDEX_TEMPLATE = r"""
     <title>{{ meta_title }}</title>
     <meta name="description" content="{{ meta_desc }}">
 
-    <!-- Dynamic Social Sharing Meta Tags (OpenGraph & Twitter Card) -->
+    <!-- DYNAMIC SOCIAL PREVIEW META TAGS (OPEN GRAPH & TWITTER) -->
     <meta property="og:site_name" content="Ijebu Connect">
     <meta property="og:title" content="{{ meta_title }}">
     <meta property="og:description" content="{{ meta_desc }}">
@@ -1410,7 +1429,7 @@ INDEX_TEMPLATE = r"""
         #toast-container { position: fixed; top: 12px; right: 12px; left: 12px; z-index: 9999; pointer-events:none; }
         .toast { background: var(--navy-blue); color: #fff; padding: 12px; border-radius: 12px; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
 
-        /* ULTRA RESPONSIVE MOBILE HEADER */
+        /* HEADER & LAYOUT */
         header { background: #fff; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border-light); position: sticky; top:0; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
         .header-top-row { display: flex; justify-content: space-between; align-items: center; width: 100%; }
         .header-brand { display: flex; align-items: center; gap: 8px; cursor: pointer; flex-shrink: 0; }
@@ -1426,12 +1445,12 @@ INDEX_TEMPLATE = r"""
         .icon-btn { background: #f0f2f5; border: none; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--text-dark); cursor: pointer; position: relative; font-size: 1rem; }
         .icon-btn:hover { background: #e4e6eb; }
 
-        /* HEADER USER & LOGOUT BUTTON - LOGOUT ON TOP OF NAME */
+        /* USER HEADER WITH LOGOUT ON TOP OF NAME */
         .user-header-stacked { display: flex; flex-direction: column; align-items: flex-end; justify-content: center; gap: 2px; }
         .header-logout-btn { background: #ef4444; color: #fff; border: none; padding: 2px 8px; border-radius: 10px; font-size: 0.65rem; font-weight: 800; cursor: pointer; line-height: 1.2; text-transform: uppercase; }
         .header-logout-btn:hover { background: #dc2626; }
 
-        /* NOTIFICATION DROPDOWN */
+        /* NOTIFICATIONS DROPDOWN */
         .notif-dropdown { display: none; position: absolute; top: 46px; right: 0; width: 310px; max-height: 400px; overflow-y: auto; background: #fff; border-radius: 12px; border: 1px solid var(--border-light); box-shadow: 0 4px 16px rgba(0,0,0,0.15); z-index: 1100; padding: 8px; }
         .notif-item { padding: 10px; border-bottom: 1px solid #f0f2f5; display: flex; gap: 10px; align-items: center; font-size: 0.8rem; cursor: pointer; border-radius: 8px; }
         .notif-item:hover { background: #f8fafc; }
@@ -1449,17 +1468,17 @@ INDEX_TEMPLATE = r"""
         .view-section.active { display: block; }
         .card { background: #fff; border: 1px solid var(--border-light); border-radius: 12px; padding: 1rem; margin-bottom: 0.85rem; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
 
-        /* CLICKABLE USER NAMES */
         .clickable-name { cursor: pointer; color: var(--navy-blue); font-weight: 800; }
         .clickable-name:hover { text-decoration: underline; color: var(--fb-blue); }
 
+        /* PROFILE BANNER & AVATAR */
         .fb-group-banner { height: 160px; background: linear-gradient(135deg, #1877f2, #0b1e36); border-radius: 12px 12px 0 0; position: relative; margin: -1rem -1rem 45px -1rem; background-size: cover; background-position: center; }
         .fb-group-avatar { position: absolute; bottom: -35px; left: 16px; width: 75px; height: 75px; border-radius: 16px; border: 4px solid #fff; background: var(--fb-blue); overflow: hidden; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 800; }
 
         .feed-post { background: #fff; border: 1px solid var(--border-light); border-radius: 12px; padding: 0.88rem; margin-bottom: 0.85rem; }
         .post-header { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; }
         .avatar { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; flex-shrink: 0; background-size: cover; background-position: center; cursor: pointer; }
-        
+
         .post-actions { display: flex; gap: 6px; padding-top: 8px; margin-top: 8px; border-top: 1px solid var(--border-light); }
         .post-action-btn { flex: 1; background: none; border: none; padding: 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; }
         .post-action-btn:hover { background: #f0f2f5; }
@@ -1475,7 +1494,7 @@ INDEX_TEMPLATE = r"""
         .app-footer { background: #fff; border-top: 1px solid var(--border-light); padding: 1.2rem; text-align: center; font-size: 0.78rem; color: var(--text-muted); margin-top: 2rem; }
         .app-footer a { color: var(--fb-blue); text-decoration: none; font-weight: 700; }
 
-        /* CHAT TICKS STYLING */
+        /* CHAT TICKS */
         .chat-tick { font-size: 0.75rem; margin-left: 4px; }
         .tick-sent { color: var(--tick-gray); }
         .tick-delivered { color: var(--tick-gray); }
@@ -1526,11 +1545,10 @@ INDEX_TEMPLATE = r"""
     <div class="nav-pill" data-nav="events" onclick="switchNav('events')"><i class="fa-solid fa-calendar-days"></i> Events</div>
     <div class="nav-pill" data-nav="market" onclick="switchNav('market')"><i class="fa-solid fa-store"></i> Market</div>
     <div class="nav-pill" data-nav="dating" onclick="switchNav('dating')"><i class="fa-solid fa-heart" style="color:#ef4444;"></i> Dating</div>
-    <div class="nav-pill" id="admin-pill" style="display:none;" onclick="window.location.href='/admin'"><i class="fa-solid fa-gear"></i> Admin Panel</div>
 </div>
 
 <div class="app-container">
-    <!-- GLOBAL SEARCH VIEW -->
+    <!-- SEARCH VIEW -->
     <div id="view-search" class="view-section">
         <h3 style="font-size:1.05rem;font-weight:800;margin-bottom:10px;color:var(--navy-blue);">🔍 Live Search Results</h3>
         <div id="search-results-container"></div>
@@ -1633,11 +1651,79 @@ INDEX_TEMPLATE = r"""
     </div>
 </div>
 
+<!-- ALL SYSTEM MODALS -->
+<!-- EDIT PROFILE MODAL -->
+<div id="edit-profile-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+    <div class="card" style="max-width:440px;width:100%;max-height:90vh;overflow-y:auto;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <h3 style="font-weight:800;color:var(--navy-blue);">Edit Member Profile</h3>
+            <button onclick="closeEditProfileModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+        </div>
+        <form onsubmit="handleProfileUpdateSubmit(event)">
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Full Name</label><input type="text" id="edit-fullname" class="form-control" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Phone Number</label><input type="tel" id="edit-phone" class="form-control" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Occupation</label><input type="text" id="edit-occupation" class="form-control"></div>
+            <div style="display:flex;gap:8px;margin-bottom:8px;">
+                <div style="flex:1;"><label style="font-size:0.8rem;font-weight:700;">Age</label><input type="number" id="edit-age" class="form-control"></div>
+                <div style="flex:1;"><label style="font-size:0.8rem;font-weight:700;">Gender</label>
+                    <select id="edit-gender" class="form-control"><option value="Male">Male</option><option value="Female">Female</option></select>
+                </div>
+            </div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Bio / About</label><textarea id="edit-bio-text" class="form-control" rows="2"></textarea></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Profile Picture (Avatar)</label><input type="file" id="edit-avatar-file" class="form-control" accept="image/*"></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Cover Photo Banner</label><input type="file" id="edit-cover-file" class="form-control" accept="image/*"></div>
+            <button type="submit" class="btn-submit">Save Profile Changes</button>
+        </form>
+    </div>
+</div>
+
+<!-- MULTI-PURPOSE SELL / LISTING MODAL -->
+<div id="sell-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+    <div class="card" style="max-width:440px;width:100%;max-height:90vh;overflow-y:auto;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <h3 style="font-weight:800;color:var(--navy-blue);" id="modal-sell-title">Publish Listing</h3>
+            <button onclick="closeSellModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+        </div>
+        <form onsubmit="handleProductSubmit(event)">
+            <input type="hidden" id="prod-type" value="Market">
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Title</label><input type="text" class="form-control" id="prod-title" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Category</label><input type="text" class="form-control" id="prod-category" placeholder="e.g. Electronics, Fashion, Artisans" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Price (₦)</label><input type="number" class="form-control" id="prod-price" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">WhatsApp Contact</label><input type="text" class="form-control" id="prod-whatsapp" placeholder="e.g. 09018363715" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Upload Photo/Video</label><input type="file" id="prod-img-file" class="form-control" accept="image/*,video/*"></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea class="form-control" id="prod-desc" rows="2"></textarea></div>
+            <button type="submit" class="btn-submit">Publish Item</button>
+        </form>
+    </div>
+</div>
+
+<!-- CPN UPGRADE MODAL -->
+<div id="cpn-upgrade-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+    <div class="card" style="max-width:420px;width:100%;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <h3 style="font-weight:800;color:var(--navy-blue);">Upgrade to CPN Partner (₦2,000)</h3>
+            <button onclick="closeCPNModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+        </div>
+        <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:10px;">Unlock unlimited marketplace listings and earn <strong>10% Tier-1 & 5% Tier-2 referral rewards</strong>!</p>
+        <div style="background:#f1f5f9;padding:10px;border-radius:8px;font-size:0.82rem;margin-bottom:10px;border:1px dashed var(--navy-blue);">
+            <strong>🏦 Bank Transfer Details:</strong><br>
+            Bank: <b>OPay</b><br>
+            Account Number: <b style="color:var(--emerald-green);font-size:0.95rem;">09018363715</b><br>
+            Account Name: <b>Rotimi Williams Oladele</b><br>
+            Fee: <b>₦2,000</b>
+        </div>
+        <form onsubmit="handleClaimBankTransfer(event)">
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Sender Name / Reference Note</label><input type="text" id="cpn-ref-note" class="form-control" placeholder="e.g. Paid via OPay / John Doe" required></div>
+            <button type="submit" class="btn-submit">Submit Payment Claim</button>
+        </form>
+    </div>
+</div>
+
 <footer class="app-footer">
     <p><strong>{{ company_name }}</strong> &copy; 2026. All Rights Reserved.</p>
     <p><i class="fa-solid fa-phone"></i> Phone: <strong>09018363715</strong> | <i class="fa-solid fa-envelope"></i> Email: <a href="mailto:{{ contact_email }}">{{ contact_email }}</a></p>
     <div style="margin-top:10px;">
-        <button onclick="sharePlatform()" class="btn-submit btn-secondary" style="width:auto;padding:6px 14px;font-size:0.75rem;"><i class="fa-solid fa-share-nodes"></i> Share Platform</button>
+        <button onclick="sharePlatform()" class="btn-submit btn-secondary" style="width:auto;padding:6px 14px;font-size:0.75rem;"><i class="fa-solid fa-share-nodes"></i> Share Ijebu Connect</button>
     </div>
 </footer>
 
@@ -1704,9 +1790,6 @@ async function checkSession() {
             renderHeaderAuth();
             updateUnreadChatBadges(currentUser.unread_chats || 0);
             loadNotifications();
-            if(currentUser.user_type === 'Admin') {
-                document.getElementById('admin-pill').style.display = 'flex';
-            }
         } else {
             currentUser = null;
             renderHeaderAuth();
@@ -1715,7 +1798,7 @@ async function checkSession() {
     } catch(e){}
 }
 
-/* NOTIFICATIONS ENGINE WITH DIRECT LINKING */
+/* NOTIFICATIONS WITH DIRECT NAVIGATION */
 async function loadNotifications() {
     if(!currentUser) return;
     try {
@@ -1737,7 +1820,7 @@ async function loadNotifications() {
             }
 
             menu.innerHTML = data.notifications.map(n => `
-                <div class="notif-item ${n.is_read ? '' : 'unread'}" onclick="handleNotificationClick('${n.type}', ${n.target_id}, '${n.sender_username || ''}')">
+                <div class="notif-item ${n.is_read ? '' : 'unread'}" onclick="handleNotifClick('${n.type}', ${n.target_id}, '${n.sender_username || ''}')">
                     <div class="avatar" style="width:32px;height:32px;background:var(--fb-blue);">${n.sender_avatar ? `<img src="${n.sender_avatar}" style="width:100%;height:100%;border-radius:50%;">` : '🔔'}</div>
                     <div>
                         <div>${n.message}</div>
@@ -1749,7 +1832,7 @@ async function loadNotifications() {
     } catch(e){}
 }
 
-async function handleNotificationClick(type, targetId, senderUsername) {
+async function handleNotifClick(type, targetId, senderUsername) {
     toggleNotificationsMenu();
     if(type === 'post' || type === 'like' || type === 'comment') {
         switchNav('feed');
@@ -1786,7 +1869,7 @@ function updateUnreadChatBadges(count) {
     });
 }
 
-/* HEADER WITH LOGOUT ON TOP OF NAME */
+/* HEADER WITH LOGOUT BUTTON DIRECTLY ON TOP OF USERNAME */
 function renderHeaderAuth() {
     const box = document.getElementById('header-auth');
     if(currentUser) {
@@ -1806,65 +1889,7 @@ async function handleLogout() {
     window.location.href = '/auth';
 }
 
-/* GLOBAL SEARCH ENGINE */
-async function handleGlobalSearch(q) {
-    q = q.trim();
-    if(!q) {
-        if(document.getElementById('view-search').classList.contains('active')) switchNav('feed');
-        return;
-    }
-    switchNav('search');
-    const container = document.getElementById('search-results-container');
-    container.innerHTML = '<div style="text-align:center;padding:1rem;"><i class="fa-solid fa-spinner fa-spin"></i> Searching...</div>';
-
-    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
-    const data = await res.json();
-    let html = '';
-
-    if(data.users && data.users.length) {
-        html += `<h4 style="font-size:0.88rem;margin-bottom:6px;color:var(--text-muted);">Registered Members</h4>`;
-        html += data.users.map(u => `
-            <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <div class="avatar" style="width:40px;height:40px;background:var(--fb-blue);" onclick="openProfile('${u.username}')">
-                        ${u.avatar_url ? `<img src="${u.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : u.full_name.charAt(0)}
-                    </div>
-                    <div>
-                        <h4 class="clickable-name" style="font-size:0.88rem;" onclick="openProfile('${u.username}')">${u.full_name}</h4>
-                        <p style="font-size:0.72rem;color:var(--text-muted);">@${u.username} • ${u.occupation || u.user_type}</p>
-                    </div>
-                </div>
-                <div style="display:flex;gap:4px;">
-                    <button onclick="startChatWith('${u.username}')" class="btn-submit" style="width:auto;padding:4px 10px;font-size:0.75rem;background:var(--navy-blue);">Message</button>
-                    <button onclick="openProfile('${u.username}')" class="btn-submit" style="width:auto;padding:4px 10px;font-size:0.75rem;">Profile</button>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    if(data.pages && data.pages.length) {
-        html += `<h4 style="font-size:0.88rem;margin:12px 0 6px;color:var(--text-muted);">Pages & Groups</h4>`;
-        html += data.pages.map(g => `
-            <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
-                <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="openPageDetail(${g.id})">
-                    ${g.avatar_url ? `<img src="${g.avatar_url}" style="width:40px;height:40px;border-radius:10px;object-fit:cover;">` : `<div class="avatar" style="width:40px;height:40px;border-radius:10px;background:var(--fb-blue);"><i class="fa-solid fa-flag"></i></div>`}
-                    <div>
-                        <h4 style="font-weight:800;font-size:0.88rem;">${g.name}</h4>
-                        <p style="font-size:0.72rem;color:var(--text-muted);">${g.member_count} Followers</p>
-                    </div>
-                </div>
-                <button onclick="openPageDetail(${g.id})" class="btn-submit" style="width:auto;padding:4px 10px;font-size:0.75rem;">Visit Page</button>
-            </div>
-        `).join('');
-    }
-
-    if(!html) {
-        html = `<div class="card" style="text-align:center;">No matching members or pages found for "${q}".</div>`;
-    }
-    container.innerHTML = html;
-}
-
-/* CHAT ENGINE WITH WHATSAPP TICKS */
+/* CHAT THREAD WITH WHATSAPP-STYLE MARKS */
 async function loadChatPartners() {
     if(!currentUser) return window.location.href = '/auth';
     const res = await fetch('/api/chat/partners');
@@ -1872,7 +1897,7 @@ async function loadChatPartners() {
     const c = document.getElementById('chat-partners-container');
 
     if(!data.success || !data.partners.length) {
-        c.innerHTML = '<div class="card" style="text-align:center;">No messages yet. Use search or profile to start a chat!</div>';
+        c.innerHTML = '<div class="card" style="text-align:center;">No messages yet. Use the search bar or user profiles to start a discussion!</div>';
         updateUnreadChatBadges(0);
         return;
     }
@@ -1931,7 +1956,7 @@ async function openChatThread(username) {
         msgsBox.innerHTML = data.messages.map(m => {
             const isMe = m.sender_id === data.me_id;
             
-            // WHATSAPP-STYLE MARKS RENDERER
+            // WHATSAPP-STYLE MARKS
             let ticksHtml = '';
             if(isMe) {
                 if(m.is_read) {
@@ -1947,7 +1972,7 @@ async function openChatThread(username) {
                 <div style="display:flex;justify-content:${isMe ? 'flex-end' : 'flex-start'};margin-bottom:6px;">
                     <div style="max-width:75%;padding:8px 12px;border-radius:12px;font-size:0.82rem;background:${isMe ? 'var(--fb-blue)' : '#f0f2f5'};color:${isMe ? '#fff' : '#050505'};">
                         ${m.content}
-                        <div style="font-size:0.62rem;opacity:0.8;text-align:right;margin-top:2px;display:flex;align-items:center;justify-content:flex-end;gap:2px;">
+                        <div style="font-size:0.62rem;opacity:0.85;text-align:right;margin-top:2px;display:flex;align-items:center;justify-content:flex-end;gap:2px;">
                             ${formatTimestamp(m.created_at)} ${ticksHtml}
                         </div>
                     </div>
@@ -1987,7 +2012,130 @@ async function sendChatMessage(e) {
     }
 }
 
-/* POST & MEDIA FEED ENGINE */
+/* RESTORED COMPLETE MEMBER PROFILE ENGINE */
+async function openProfile(username) {
+    const res = await fetch(`/api/users/${encodeURIComponent(username)}`);
+    const data = await res.json();
+    if(!data.success) return showToast(data.message, 'error');
+
+    const u = data.user;
+    const isSelf = currentUser && currentUser.id === u.id;
+    const coverBg = u.cover_url ? `style="background-image:url('${u.cover_url}')"` : '';
+
+    let walletBlock = '';
+    if(isSelf && (u.user_type === 'CPN Partner' || u.user_type === 'Admin')) {
+        walletBlock = `
+            <div class="card" style="background:linear-gradient(135deg, #0b1e36, #1e3a8a);color:#fff;">
+                <div style="font-size:0.85rem;">Wallet Balance: <b style="color:#f59e0b;font-size:1.1rem;">₦${u.wallet_balance.toLocaleString()}</b></div>
+                <div style="font-size:0.75rem;margin:4px 0;">Referral Code: <b>${u.referral_code}</b> | Recruits: <b>${u.recruits_count}</b></div>
+            </div>
+        `;
+    }
+
+    const postsHtml = u.posts.length ? u.posts.map(p => renderPostCard(p)).join('') : '<div class="card" style="text-align:center;">No wall updates yet.</div>';
+
+    let productsHtml = '';
+    if(u.products && u.products.length) {
+        productsHtml = `
+            <h4 style="font-size:0.9rem;margin:12px 0 6px;">Directory Listings (${u.products.length})</h4>
+            <div class="card">
+                ${u.products.map(p => `
+                    <div style="border-bottom:1px solid var(--border-light);padding-bottom:8px;margin-bottom:8px;display:flex;gap:10px;align-items:center;">
+                        ${p.image_url ? `<img src="${p.image_url}" style="width:50px;height:50px;border-radius:8px;object-fit:cover;">` : `<div style="width:50px;height:50px;background:#f0f2f5;border-radius:8px;display:flex;align-items:center;justify-content:center;"><i class="fa-solid fa-store"></i></div>`}
+                        <div style="flex:1;">
+                            <h4 style="font-weight:800;font-size:0.85rem;">${p.title}</h4>
+                            <div style="color:var(--emerald-green);font-weight:800;font-size:0.8rem;">₦${p.price.toLocaleString()}</div>
+                        </div>
+                        <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" style="background:#25d366;color:#fff;padding:4px 8px;border-radius:6px;font-size:0.7rem;text-decoration:none;font-weight:700;"><i class="fa-brands fa-whatsapp"></i> Chat</a>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+
+    document.getElementById('profile-wall-container').innerHTML = `
+        <div class="card">
+            <div class="fb-group-banner" ${coverBg}>
+                <div class="fb-group-avatar">${u.avatar_url ? `<img src="${u.avatar_url}" style="width:100%;height:100%;object-fit:cover;">` : u.full_name.charAt(0)}</div>
+            </div>
+            <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:10px;">
+                <div>
+                    <h2 style="font-size:1.1rem;font-weight:800;">${u.full_name} <span style="font-size:0.65rem;background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:6px;">${u.user_type}</span></h2>
+                    <p style="font-size:0.75rem;color:var(--text-muted);">@${u.username} • <b>${u.followers_count}</b> Followers</p>
+                </div>
+            </div>
+            <p style="font-size:0.82rem;margin:8px 0;">💼 ${u.occupation || 'Member'} | 📱 ${u.phone || ''}</p>
+            <p style="font-size:0.82rem;color:var(--text-muted);">${u.bio || 'Resident of Ijebu'}</p>
+            <div style="display:flex;gap:6px;margin-top:10px;">
+                ${isSelf ? `<button onclick="openEditProfileModal()" class="btn-submit" style="font-size:0.78rem;">✏️ Edit Profile Details</button>` : `
+                    <button onclick="startChatWith('${u.username}')" class="btn-submit" style="font-size:0.78rem;background:var(--navy-blue);"><i class="fa-solid fa-paper-plane"></i> Message</button>
+                    <button onclick="toggleFollow('${u.username}')" class="btn-submit" style="font-size:0.78rem;background:${u.is_following ? '#ef4444' : 'var(--fb-blue)'};">${u.is_following ? '✓ Following' : '+ Follow'}</button>
+                `}
+                <button onclick="shareMemberProfile('${u.username}')" class="btn-submit btn-secondary" style="font-size:0.78rem;width:auto;"><i class="fa-solid fa-share"></i> Share</button>
+            </div>
+        </div>
+        ${walletBlock}
+        ${productsHtml}
+        <h4 style="font-size:0.9rem;margin:12px 0 6px;">Profile Wall Updates</h4>
+        ${postsHtml}
+    `;
+    switchNav('profile');
+}
+
+function openEditProfileModal() {
+    if(!currentUser) return window.location.href = '/auth';
+    document.getElementById('edit-fullname').value = currentUser.full_name || '';
+    document.getElementById('edit-phone').value = currentUser.phone || '';
+    document.getElementById('edit-occupation').value = currentUser.occupation || '';
+    document.getElementById('edit-age').value = currentUser.age || 18;
+    document.getElementById('edit-gender').value = currentUser.gender || 'Male';
+    document.getElementById('edit-bio-text').value = currentUser.bio || '';
+    document.getElementById('edit-profile-modal').style.display = 'flex';
+}
+
+function closeEditProfileModal() { document.getElementById('edit-profile-modal').style.display = 'none'; }
+
+async function handleProfileUpdateSubmit(e) {
+    e.preventDefault();
+    const avatarInput = document.getElementById('edit-avatar-file');
+    const coverInput = document.getElementById('edit-cover-file');
+    let avatarUrl = '', coverUrl = '';
+
+    if(avatarInput && avatarInput.files[0]) avatarUrl = (await uploadSelectedFile(avatarInput)).url;
+    if(coverInput && coverInput.files[0]) coverUrl = (await uploadSelectedFile(coverInput)).url;
+
+    const res = await fetch('/api/users/profile/update', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+            full_name: document.getElementById('edit-fullname').value,
+            phone: document.getElementById('edit-phone').value,
+            occupation: document.getElementById('edit-occupation').value,
+            age: document.getElementById('edit-age').value,
+            gender: document.getElementById('edit-gender').value,
+            bio: document.getElementById('edit-bio-text').value,
+            avatar_url: avatarUrl,
+            cover_url: coverUrl
+        })
+    });
+    const data = await res.json();
+    showToast(data.message);
+    if(data.success) {
+        closeEditProfileModal();
+        checkSession();
+        openProfile(currentUser.username);
+    }
+}
+
+async function toggleFollow(username) {
+    if(!currentUser) return window.location.href = '/auth';
+    const res = await fetch(`/api/users/${encodeURIComponent(username)}/follow`, {method:'POST'});
+    const data = await res.json();
+    showToast(data.message);
+    if(data.success) openProfile(username);
+}
+
+/* POST CARDS & FEED */
 async function loadPosts(postType, containerId, groupId = 0, singlePostId = 0) {
     let url = `/api/posts?type=${postType}&group_id=${groupId}`;
     if(singlePostId > 0) url = `/api/posts?post_id=${singlePostId}`;
@@ -2141,47 +2289,6 @@ function sharePlatform() {
     }
 }
 
-async function openProfile(username) {
-    const res = await fetch(`/api/users/${encodeURIComponent(username)}`);
-    const data = await res.json();
-    if(!data.success) return showToast(data.message, 'error');
-
-    const u = data.user;
-    const isSelf = currentUser && currentUser.id === u.id;
-    const postsHtml = u.posts.length ? u.posts.map(p => renderPostCard(p)).join('') : '<div class="card" style="text-align:center;">No wall updates yet.</div>';
-
-    document.getElementById('profile-wall-container').innerHTML = `
-        <div class="card">
-            <div style="display:flex;justify-content:space-between;align-items:center;">
-                <div>
-                    <h2 style="font-size:1.1rem;font-weight:800;">${u.full_name}</h2>
-                    <p style="font-size:0.75rem;color:var(--text-muted);">@${u.username} • <b>${u.followers_count}</b> Followers</p>
-                </div>
-            </div>
-            <p style="font-size:0.82rem;margin:8px 0;">💼 ${u.occupation || 'Member'}</p>
-            <p style="font-size:0.82rem;color:var(--text-muted);">${u.bio || 'Resident of Ijebu'}</p>
-            <div style="display:flex;gap:6px;margin-top:10px;">
-                ${isSelf ? '' : `
-                    <button onclick="startChatWith('${u.username}')" class="btn-submit" style="font-size:0.78rem;background:var(--navy-blue);"><i class="fa-solid fa-paper-plane"></i> Message</button>
-                    <button onclick="toggleFollow('${u.username}')" class="btn-submit" style="font-size:0.78rem;background:${u.is_following ? '#ef4444' : 'var(--fb-blue)'};">${u.is_following ? '✓ Following' : '+ Follow'}</button>
-                `}
-                <button onclick="shareMemberProfile('${u.username}')" class="btn-submit btn-secondary" style="font-size:0.78rem;width:auto;"><i class="fa-solid fa-share"></i> Share</button>
-            </div>
-        </div>
-        <h4 style="font-size:0.9rem;margin:12px 0 6px;">Profile Wall Updates</h4>
-        ${postsHtml}
-    `;
-    switchNav('profile');
-}
-
-async function toggleFollow(username) {
-    if(!currentUser) return window.location.href = '/auth';
-    const res = await fetch(`/api/users/${encodeURIComponent(username)}/follow`, {method:'POST'});
-    const data = await res.json();
-    showToast(data.message);
-    if(data.success) openProfile(username);
-}
-
 window.onload = async function() {
     await checkSession();
     if(currentUser) {
@@ -2305,11 +2412,15 @@ async function handleRegister(e) {
 """
 
 # ======================================================================
-# ROUTE HANDLERS & DYNAMIC OG METADATA PREVIEW GENERATOR
+# ROUTE HANDLERS & DYNAMIC OPENGRAPH SOCIAL SHARE PREVIEW ENGINE
 # ======================================================================
 @app.route('/')
 def index():
-    if 'user_id' not in session:
+    post_id = request.args.get('post')
+    user_param = request.args.get('user')
+
+    # IF NO PREVIEW PARAMS AND NOT LOGGED IN, REDIRECT USER TO /auth
+    if 'user_id' not in session and not post_id and not user_param:
         return redirect(url_for('auth_page'))
 
     host_url = request.host_url
@@ -2319,21 +2430,18 @@ def index():
     logo1, logo2 = get_system_logos()
     system_logo_url = f"{host_url.rstrip('/')}{logo2}"
 
-    # Default Platform Share Metadata
-    meta_title = f"{COMPANY_NAME} - Ijebu Connect"
+    # DEFAULT PLATFORM PREVIEW METADATA
+    meta_title = "Ijebu Connect - Community Platform"
     meta_desc = "Connect with pages, friends, and trade on Ijebu Connect."
     meta_image = system_logo_url
     meta_url = request.url
     deep_link_json = 'null'
 
-    # DEEP LINK & SOCIAL PREVIEW PARSER
-    post_id = request.args.get('post')
-    user_param = request.args.get('user')
-
     db = get_db()
     cursor = db.cursor()
     p = query_param()
 
+    # DYNAMIC POST PREVIEW GENERATOR
     if post_id:
         try:
             cursor.execute(f'''
@@ -2344,19 +2452,22 @@ def index():
             post_row = cursor.fetchone()
             if post_row:
                 meta_title = f"Post by {post_row['full_name']} | Ijebu Connect"
-                post_snippet = (post_row['content'][:140] + "...") if len(post_row['content']) > 140 else post_row['content']
-                meta_desc = post_snippet if post_snippet else "Check out this post on Ijebu Connect!"
+                content_clean = post_row['content'].strip() if post_row['content'] else ""
+                if len(content_clean) > 140:
+                    meta_desc = content_clean[:137] + "..."
+                else:
+                    meta_desc = content_clean if content_clean else "Check out this post on Ijebu Connect!"
 
                 if post_row['image_url']:
                     meta_image = f"{host_url.rstrip('/')}{post_row['image_url']}" if post_row['image_url'].startswith('/') else post_row['image_url']
                 else:
-                    # Partial Logo preview for text-only messages
                     meta_image = system_logo_url
 
                 deep_link_json = json.dumps({'type': 'post', 'id': int(post_id)})
         except Exception as e:
             logger.error(f"Error parsing deep link post metadata: {e}")
 
+    # DYNAMIC MEMBER PROFILE PREVIEW GENERATOR
     elif user_param:
         try:
             cursor.execute(f'''
