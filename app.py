@@ -62,7 +62,6 @@ ALLOWED_EXTENSIONS = ALLOWED_IMAGE_EXTS.union(ALLOWED_VIDEO_EXTS)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# LOGO DETECTION HELPER
 def get_system_logos():
     """Detects and returns 1st logo for AUTH page and 2nd logo for MAIN SYSTEM."""
     static_dir = os.path.join(app.root_path, 'static')
@@ -83,7 +82,6 @@ def get_system_logos():
     logo2 = found_files[1] if len(found_files) > 1 else (found_files[0] if len(found_files) > 0 else "/static/logo2.png")
     return logo1, logo2
 
-# HTTP CACHING & SPEED OPTIMIZATION FOR STATIC ASSETS
 @app.after_request
 def add_header(response):
     if request.path.startswith('/static/'):
@@ -91,7 +89,7 @@ def add_header(response):
     return response
 
 # ======================================================================
-# DATABASE ENGINE & NON-DESTRUCTIVE MIGRATION
+# DATABASE ENGINE (AUTOMATIC POSTGRES / SQLITE DETECTOR)
 # ======================================================================
 def get_db():
     if 'db' not in g:
@@ -151,9 +149,9 @@ def count_user_listings(user_id):
     ad_post_count = cursor.fetchone()[0]
     return prod_count + ad_post_count
 
-# HARDCODED SEEDING TO PREVENT RENDER DATABASE RESET LOSSES
+# HARDCODED SEEDING TO PREVENT DATA RESET LOSSES ON RENDER DEPLOYS
 def seed_hardcoded_data(cursor, db):
-    logger.info("Executing hardcoded seeding for Render environment persistence...")
+    logger.info("Executing persistent seeding...")
     p = query_param()
     
     admin_username = os.environ.get('ADMIN_SEED_USERNAME', 'ijebuconnect').lower()
@@ -760,7 +758,7 @@ def logout():
     return jsonify({'success': True, 'message': 'Logged out successfully.'})
 
 # ======================================================================
-# FULL PROFILE UPDATE ENDPOINT
+# PROFILE UPDATE ENDPOINT
 # ======================================================================
 @app.route('/api/users/profile/update', methods=['POST'])
 def update_user_profile():
@@ -1051,7 +1049,7 @@ def request_payout():
     return jsonify({'success': True, 'message': 'Cashout request submitted!'})
 
 # ======================================================================
-# MULTI-PILLAR PRODUCTS API (2 FREE LISTINGS ENFORCEMENT)
+# MULTI-PILLAR PRODUCTS API
 # ======================================================================
 @app.route('/api/products', methods=['GET', 'POST'])
 def handle_products():
@@ -1513,7 +1511,7 @@ def chat_thread(username):
     return jsonify({'success': True, 'other': dict(other), 'messages': messages, 'me_id': uid})
 
 # ======================================================================
-# ROBUST ADMIN API (ADMIN PROFILE EDITING & MEMBER SEARCH)
+# SEARCHABLE ADMIN API (MANAGE MEMBERS, POSTS, CLAIMS & CASHOUTS VIA SEARCH)
 # ======================================================================
 @app.route('/api/admin/overview', methods=['GET'])
 def get_admin_overview():
@@ -1584,14 +1582,21 @@ def admin_manage_posts():
         db.commit()
         return jsonify({'success': True, 'message': 'Post deleted successfully.'})
 
-    cursor.execute('''
+    q = request.args.get('q', '').strip().lower()
+    sql = '''
         SELECT p.id, p.content, p.post_type, p.image_url, p.created_at,
                u.full_name, u.username, g.name AS group_name
         FROM posts p
         JOIN users u ON p.user_id = u.id
         LEFT JOIN groups g ON p.group_id = g.id
-        ORDER BY p.id DESC LIMIT 100
-    ''')
+    '''
+    if q:
+        sql += f" WHERE LOWER(u.full_name) LIKE {p} OR LOWER(u.username) LIKE {p} OR LOWER(p.content) LIKE {p}"
+        sql += " ORDER BY p.id DESC LIMIT 50"
+        cursor.execute(sql, (f"%{q}%", f"%{q}%", f"%{q}%"))
+    else:
+        sql += " ORDER BY p.id DESC LIMIT 50"
+        cursor.execute(sql)
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 @app.route('/api/admin/users', methods=['GET', 'DELETE'])
@@ -1616,7 +1621,15 @@ def admin_manage_users():
         db.commit()
         return jsonify({'success': True, 'message': 'Member removed.'})
 
-    cursor.execute("SELECT id, full_name, username, phone, user_type, wallet_balance, occupation FROM users ORDER BY id DESC")
+    q = request.args.get('q', '').strip().lower()
+    sql = "SELECT id, full_name, username, phone, user_type, wallet_balance, occupation FROM users"
+    if q:
+        sql += f" WHERE LOWER(full_name) LIKE {p} OR LOWER(username) LIKE {p} OR phone LIKE {p}"
+        sql += " ORDER BY id DESC LIMIT 50"
+        cursor.execute(sql, (f"%{q}%", f"%{q}%", f"%{q}%"))
+    else:
+        sql += " ORDER BY id DESC LIMIT 50"
+        cursor.execute(sql)
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 @app.route('/api/admin/users/update', methods=['POST'])
@@ -1681,7 +1694,15 @@ def admin_partner_requests():
             db.commit()
             return jsonify({'success': True, 'message': 'Partner claim rejected.'})
 
-    cursor.execute('''SELECT pr.*, u.full_name, u.phone, u.username FROM partner_requests pr JOIN users u ON pr.user_id = u.id ORDER BY pr.id DESC''')
+    q = request.args.get('q', '').strip().lower()
+    sql = 'SELECT pr.*, u.full_name, u.phone, u.username FROM partner_requests pr JOIN users u ON pr.user_id = u.id'
+    if q:
+        sql += f" WHERE LOWER(u.full_name) LIKE {p} OR LOWER(u.username) LIKE {p} OR LOWER(pr.reference_note) LIKE {p}"
+        sql += " ORDER BY pr.id DESC LIMIT 50"
+        cursor.execute(sql, (f"%{q}%", f"%{q}%", f"%{q}%"))
+    else:
+        sql += " ORDER BY pr.id DESC LIMIT 50"
+        cursor.execute(sql)
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 @app.route('/api/admin/payouts', methods=['GET', 'POST'])
@@ -1708,7 +1729,15 @@ def manage_payouts():
         db.commit()
         return jsonify({'success': True, 'message': f'Payout marked as {new_status}.'})
 
-    cursor.execute('''SELECT pr.*, u.full_name, u.phone, u.username FROM payout_requests pr JOIN users u ON pr.user_id = u.id ORDER BY pr.id DESC''')
+    q = request.args.get('q', '').strip().lower()
+    sql = 'SELECT pr.*, u.full_name, u.phone, u.username FROM payout_requests pr JOIN users u ON pr.user_id = u.id'
+    if q:
+        sql += f" WHERE LOWER(u.full_name) LIKE {p} OR LOWER(u.username) LIKE {p} OR LOWER(pr.bank_name) LIKE {p} OR pr.account_number LIKE {p}"
+        sql += " ORDER BY pr.id DESC LIMIT 50"
+        cursor.execute(sql, (f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%"))
+    else:
+        sql += " ORDER BY pr.id DESC LIMIT 50"
+        cursor.execute(sql)
     return jsonify([dict(r) for r in cursor.fetchall()])
 
 # ======================================================================
@@ -1749,27 +1778,29 @@ body { background: var(--bg-body); color: var(--text-dark); display: flex; flex-
 #toast-container { position: fixed; top: 12px; right: 12px; left: 12px; z-index: 9999; pointer-events:none; }
 .toast { background: var(--navy-blue); color: #fff; padding: 12px; border-radius: 12px; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
 
-header { background: #fff; padding: 0.6rem 1rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-light); position: sticky; top:0; z-index: 100; gap: 8px; }
+/* ULTRA RESPONSIVE MOBILE HEADER & SEARCH BAR */
+header { background: #fff; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border-light); position: sticky; top:0; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
+.header-top-row { display: flex; justify-content: space-between; align-items: center; width: 100%; }
 .header-brand { display: flex; align-items: center; gap: 8px; cursor: pointer; flex-shrink: 0; }
-.header-logo-img { height: 36px; width: auto; max-width: 120px; object-fit: contain; border-radius: 6px; }
+.header-logo-img { height: 34px; width: auto; max-width: 110px; object-fit: contain; border-radius: 6px; }
 .brand-title { font-size: 1.05rem; font-weight: 800; color: var(--navy-blue); }
 .brand-title span { color: var(--fb-blue); }
 
-.global-search-wrap { position: relative; flex: 1; max-width: 240px; }
-.global-search-input { padding: 6px 12px 6px 32px; border-radius: 20px; border: 1.5px solid var(--border-light); font-size: 0.78rem; outline: none; width: 100%; background: #f0f2f5; }
-.global-search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.75rem; }
+.global-search-wrap { position: relative; width: 100%; }
+.global-search-input { padding: 8px 12px 8px 36px; border-radius: 20px; border: 1.5px solid var(--border-light); font-size: 0.82rem; outline: none; width: 100%; background: #f0f2f5; }
+.global-search-icon { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); color: var(--text-muted); font-size: 0.8rem; }
 
 .header-right-actions { display: flex; align-items: center; gap: 8px; position: relative; }
 .icon-btn { background: #f0f2f5; border: none; width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: var(--text-dark); cursor: pointer; position: relative; font-size: 1rem; }
 .icon-btn:hover { background: #e4e6eb; }
 
 /* NOTIFICATION DROPDOWN */
-.notif-dropdown { display: none; position: absolute; top: 46px; right: 0; width: 320px; max-height: 400px; overflow-y: auto; background: #fff; border-radius: 12px; border: 1px solid var(--border-light); box-shadow: 0 4px 16px rgba(0,0,0,0.15); z-index: 1100; padding: 10px; }
+.notif-dropdown { display: none; position: absolute; top: 46px; right: 0; width: 310px; max-height: 400px; overflow-y: auto; background: #fff; border-radius: 12px; border: 1px solid var(--border-light); box-shadow: 0 4px 16px rgba(0,0,0,0.15); z-index: 1100; padding: 8px; }
 .notif-item { padding: 10px; border-bottom: 1px solid #f0f2f5; display: flex; gap: 10px; align-items: center; font-size: 0.8rem; cursor: pointer; border-radius: 8px; }
 .notif-item:hover { background: #f8fafc; }
 .notif-item.unread { background: #e7f3ff; font-weight: 600; }
 
-.top-nav-pills { display: flex; gap: 6px; padding: 0.6rem 0.5rem; background: #fff; border-bottom: 1px solid var(--border-light); overflow-x: auto; scrollbar-width: none; }
+.top-nav-pills { display: flex; gap: 6px; padding: 0.5rem; background: #fff; border-bottom: 1px solid var(--border-light); overflow-x: auto; scrollbar-width: none; }
 .top-nav-pills::-webkit-scrollbar { display: none; }
 .nav-pill { padding: 6px 14px; border-radius: 20px; font-size: 0.78rem; font-weight: 700; background: #f0f2f5; color: var(--text-muted); cursor: pointer; flex-shrink: 0; display: flex; align-items: center; gap: 4px; }
 .nav-pill.active { background: var(--fb-blue); color: #fff; }
@@ -1809,6 +1840,11 @@ header { background: #fff; padding: 0.6rem 1rem; display: flex; justify-content:
 
 .app-footer { background: #fff; border-top: 1px solid var(--border-light); padding: 1.2rem; text-align: center; font-size: 0.78rem; color: var(--text-muted); margin-top: 2rem; }
 .app-footer a { color: var(--fb-blue); text-decoration: none; font-weight: 700; }
+
+@media(min-width: 600px) {
+  header { flex-direction: row; align-items: center; justify-content: space-between; }
+  .global-search-wrap { max-width: 260px; }
+}
 </style>
 <script>
 window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
@@ -1818,23 +1854,26 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 <div id="toast-container"></div>
 
 <header>
-  <div class="header-brand" onclick="switchNav('feed')">
-    <img src="{{ app_logo }}" alt="Logo" class="header-logo-img" onerror="this.style.display='none'">
-    <div class="brand-title">IJEBU <span>CONNECT</span></div>
+  <div class="header-top-row">
+    <div class="header-brand" onclick="switchNav('feed')">
+      <img src="{{ app_logo }}" alt="Logo" class="header-logo-img" onerror="this.style.display='none'">
+      <div class="brand-title">IJEBU <span>CONNECT</span></div>
+    </div>
+
+    <div class="header-right-actions">
+      <button class="icon-btn" onclick="toggleNotificationsMenu()" title="Notifications">
+        <i class="fa-solid fa-bell"></i>
+        <span class="unread-badge notif-unread-badge" id="notif-badge-count" style="display:none; position:absolute; top:-2px; right:-2px;">0</span>
+      </button>
+      <div class="notif-dropdown" id="notif-dropdown-menu"></div>
+      <div id="header-auth"></div>
+    </div>
   </div>
 
+  <!-- MAIN PROMINENT SEARCH BAR -->
   <div class="global-search-wrap">
     <i class="fa-solid fa-magnifying-glass global-search-icon"></i>
-    <input type="text" class="global-search-input" placeholder="Search members, pages..." onkeyup="handleGlobalSearch(this.value)">
-  </div>
-
-  <div class="header-right-actions">
-    <button class="icon-btn" onclick="toggleNotificationsMenu()" title="Notifications">
-      <i class="fa-solid fa-bell"></i>
-      <span class="unread-badge notif-unread-badge" id="notif-badge-count" style="display:none; position:absolute; top:-2px; right:-2px;">0</span>
-    </button>
-    <div class="notif-dropdown" id="notif-dropdown-menu"></div>
-    <div id="header-auth"></div>
+    <input type="text" class="global-search-input" placeholder="🔍 Search members, pages, posts..." onkeyup="handleGlobalSearch(this.value)">
   </div>
 </header>
 
@@ -1856,7 +1895,7 @@ window.INITIAL_DEEP_LINK_DATA = {{ deep_link_json | safe }};
 <div class="app-container">
   <!-- GLOBAL SEARCH RESULTS SECTION -->
   <div id="view-search" class="view-section">
-    <h3 style="font-size:1.05rem;font-weight:800;margin-bottom:10px;color:var(--navy-blue);">🔍 Search Results</h3>
+    <h3 style="font-size:1.05rem;font-weight:800;margin-bottom:10px;color:var(--navy-blue);">🔍 Live Search Results</h3>
     <div id="search-results-container"></div>
   </div>
 
@@ -2178,7 +2217,7 @@ async function checkSession() {
   } catch(e){}
 }
 
-/* FACEBOOK-STYLE NOTIFICATIONS JS */
+/* FACEBOOK-STYLE NOTIFICATIONS ENGINE */
 async function loadNotifications() {
   if(!currentUser) return;
   try {
@@ -3116,20 +3155,19 @@ ADMIN_TEMPLATE = r"""
 body { font-family:'Plus Jakarta Sans', sans-serif; background:#f8fafc; color:#0f172a; padding:1rem; max-width:1000px; margin:0 auto; }
 .admin-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
 .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.75rem; margin-bottom:1rem; }
-.card { background:#fff; border:1.5px solid #cbd5e1; border-radius:12px; padding:1rem; }
+.card { background:#fff; border:1.5px solid #cbd5e1; border-radius:12px; padding:1rem; margin-bottom: 10px; }
 .val { font-size:1.3rem; font-weight:800; color:#059669; }
 .lbl { font-size:0.72rem; color:#64748b; font-weight:700; text-transform:uppercase; }
 .admin-tabs { display:flex; gap:6px; margin-bottom:1rem; border-bottom:2px solid #cbd5e1; padding-bottom:6px; overflow-x:auto; }
 .admin-tab { padding:6px 12px; border-radius:6px; border:none; background:#fff; font-weight:700; font-size:0.8rem; cursor:pointer; color:#64748b; flex-shrink:0; }
 .admin-tab.active { background:#0b1e36; color:#fff; }
 .tab-sec { display:none; } .tab-sec.active { display:block; }
-table { width:100%; border-collapse:collapse; background:#fff; border-radius:10px; overflow:hidden; border:1.5px solid #cbd5e1; font-size:0.82rem; margin-top:0.5rem; }
-th, td { padding:8px 10px; text-align:left; border-bottom:1px solid #cbd5e1; }
-th { background:#0b1e36; color:#fff; }
-.btn-act { padding:4px 8px; border-radius:6px; border:none; color:#fff; font-weight:700; cursor:pointer; font-size:0.72rem; }
+.btn-act { padding:6px 12px; border-radius:6px; border:none; color:#fff; font-weight:700; cursor:pointer; font-size:0.75rem; }
 .btn-app { background:#059669; } .btn-rej { background:#ef4444; } .btn-del { background:#dc2626; } .btn-edit { background:#2563eb; }
-.form-control { padding: 8px 10px; border-radius: 6px; border: 1.5px solid #cbd5e1; font-size: 0.85rem; outline: none; width: 100%; margin-bottom: 8px; }
+.form-control { padding: 10px 12px; border-radius: 8px; border: 1.5px solid #cbd5e1; font-size: 0.85rem; outline: none; width: 100%; margin-bottom: 8px; }
+.search-box-wrap { margin-bottom: 1rem; }
 .app-footer { margin-top: 2rem; padding: 1rem 0; border-top: 1px solid #cbd5e1; text-align: center; font-size: 0.78rem; color: #64748b; }
+.item-card { background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
 </style>
 </head>
 <body>
@@ -3153,50 +3191,43 @@ th { background:#0b1e36; color:#fff; }
   <button class="admin-tab" onclick="switchAdminTab('payouts')">Bank Cashouts</button>
 </div>
 
-<!-- MANAGE POSTS TAB -->
+<!-- MANAGE POSTS TAB WITH LIVE SEARCH BAR -->
 <div id="adm-posts" class="tab-sec active">
-  <h3>Platform Posts Moderation</h3>
-  <table>
-    <thead><tr><th>Author</th><th>Content Preview</th><th>Page / Section</th><th>Action</th></tr></thead>
-    <tbody id="posts-body"></tbody>
-  </table>
-</div>
-
-<!-- MANAGE MEMBERS TAB WITH SEARCH BAR -->
-<div id="adm-members" class="tab-sec">
-  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-    <h3>Registered Platform Members</h3>
-    <input type="text" id="admin-member-search" class="form-control" placeholder="🔍 Search member name, phone or username..." style="max-width:300px;margin:0;" onkeyup="filterAdminMembers(this.value)">
+  <div class="search-box-wrap">
+    <input type="text" class="form-control" placeholder="🔍 Search post content, author name or username..." onkeyup="searchAdminPosts(this.value)">
   </div>
-  <table>
-    <thead><tr><th>Full Name</th><th>Username</th><th>Phone</th><th>Type</th><th>Wallet Balance</th><th>Action</th></tr></thead>
-    <tbody id="members-body"></tbody>
-  </table>
+  <div id="posts-container"></div>
 </div>
 
-<!-- CPN CLAIMS TAB -->
+<!-- MANAGE MEMBERS TAB WITH LIVE SEARCH BAR -->
+<div id="adm-members" class="tab-sec">
+  <div class="search-box-wrap">
+    <input type="text" class="form-control" placeholder="🔍 Search member full name, phone or username..." onkeyup="searchAdminMembers(this.value)">
+  </div>
+  <div id="members-container"></div>
+</div>
+
+<!-- CPN CLAIMS TAB WITH LIVE SEARCH BAR -->
 <div id="adm-partners" class="tab-sec">
-  <h3>Pending CPN Partner Upgrades (₦2,000)</h3>
-  <table>
-    <thead><tr><th>Member</th><th>Amount</th><th>Reference Note</th><th>Action</th></tr></thead>
-    <tbody id="partner-reqs-body"></tbody>
-  </table>
+  <div class="search-box-wrap">
+    <input type="text" class="form-control" placeholder="🔍 Search partner upgrade request by member name or reference..." onkeyup="searchAdminPartners(this.value)">
+  </div>
+  <div id="partners-container"></div>
 </div>
 
-<!-- BANK CASHOUTS TAB -->
+<!-- BANK CASHOUTS TAB WITH LIVE SEARCH BAR -->
 <div id="adm-payouts" class="tab-sec">
-  <h3>Member Cashout Requests</h3>
-  <table>
-    <thead><tr><th>User</th><th>Amount</th><th>Bank Details</th><th>Action</th></tr></thead>
-    <tbody id="payouts-body"></tbody>
-  </table>
+  <div class="search-box-wrap">
+    <input type="text" class="form-control" placeholder="🔍 Search payout request by member name, bank or account..." onkeyup="searchAdminPayouts(this.value)">
+  </div>
+  <div id="payouts-container"></div>
 </div>
 
 <!-- ADMIN EDIT MEMBER MODAL -->
 <div id="admin-edit-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
   <div class="card" style="max-width:400px;width:100%;">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
-      <h3 style="font-size:1rem;font-weight:800;">Edit Member Details</h3>
+      <h3 style="font-size:1rem;font-weight:800;">Edit Member Profile</h3>
       <button onclick="closeAdminEditModal()" style="background:none;border:none;font-size:1.4rem;">&times;</button>
     </div>
     <form onsubmit="handleAdminUserUpdate(event)">
@@ -3223,8 +3254,6 @@ th { background:#0b1e36; color:#fff; }
 </footer>
 
 <script>
-let cachedMembers = [];
-
 function switchAdminTab(t) {
   document.querySelectorAll('.admin-tab').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-sec').forEach(s => s.classList.remove('active'));
@@ -3243,68 +3272,56 @@ async function loadAdminOverview() {
   document.getElementById('st-partners').innerText = data.total_partners;
   document.getElementById('st-wallets').innerText = '₦' + data.total_partner_wallets.toLocaleString();
 
-  loadAdminPosts();
-  loadMembers();
-  loadPartnerRequests();
-  loadPayouts();
+  searchAdminPosts('');
+  searchAdminMembers('');
+  searchAdminPartners('');
+  searchAdminPayouts('');
 }
 
-async function loadAdminPosts() {
-  const res = await fetch('/api/admin/posts');
+/* SEARCHABLE MANAGE POSTS */
+async function searchAdminPosts(q) {
+  const res = await fetch(`/api/admin/posts?q=${encodeURIComponent(q)}`);
   const posts = await res.json();
-  const body = document.getElementById('posts-body');
-  if(!posts.length) { body.innerHTML = '<tr><td colspan="4">No posts found.</td></tr>'; return; }
-  body.innerHTML = posts.map(p => `
-    <tr>
-      <td><b>${p.full_name}</b><br><small>@${p.username}</small></td>
-      <td style="max-width:280px;">${p.content}</td>
-      <td><b>${p.group_name ? `Page: ${p.group_name}` : p.post_type}</b></td>
-      <td><button class="btn-act btn-del" onclick="deleteAdminPost(${p.id})">Delete Post</button></td>
-    </tr>
+  const box = document.getElementById('posts-container');
+  if(!posts.length) { box.innerHTML = '<div class="card" style="text-align:center;">No posts found.</div>'; return; }
+  box.innerHTML = posts.map(p => `
+    <div class="item-card">
+      <div>
+        <div style="font-weight:800;">${p.full_name} <small style="color:#64748b;">(@${p.username})</small></div>
+        <div style="font-size:0.82rem;margin:4px 0;">${p.content}</div>
+        <small style="color:#64748b;">${p.group_name ? `Page: ${p.group_name}` : p.post_type}</small>
+      </div>
+      <button class="btn-act btn-del" onclick="deleteAdminPost(${p.id})">Delete Post</button>
+    </div>
   `).join('');
 }
 
 async function deleteAdminPost(pid) {
-  if(!confirm('Are you sure you want to delete this post and its comments?')) return;
+  if(!confirm('Are you sure you want to delete this post?')) return;
   const res = await fetch(`/api/admin/posts?post_id=${pid}`, {method:'DELETE'});
   const data = await res.json();
   alert(data.message);
   loadAdminOverview();
 }
 
-async function loadMembers() {
-  const res = await fetch('/api/admin/users');
-  cachedMembers = await res.json();
-  renderMembersTable(cachedMembers);
-}
-
-function renderMembersTable(users) {
-  const body = document.getElementById('members-body');
-  if(!users.length) { body.innerHTML = '<tr><td colspan="6">No matching members found.</td></tr>'; return; }
-  body.innerHTML = users.map(u => `
-    <tr>
-      <td><b>${u.full_name}</b></td>
-      <td>@${u.username}</td>
-      <td>${u.phone}</td>
-      <td><b>${u.user_type}</b></td>
-      <td><b>₦${(u.wallet_balance || 0).toLocaleString()}</b></td>
-      <td>
-        <button class="btn-act btn-edit" onclick="openAdminEditModal(${u.id}, '${u.full_name.replace(/'/g, "\\'")}', '${u.phone}', '${u.user_type}', ${u.wallet_balance || 0}, '${(u.occupation||'').replace(/'/g, "\\'")}')">Edit</button>
+/* SEARCHABLE MANAGE MEMBERS */
+async function searchAdminMembers(q) {
+  const res = await fetch(`/api/admin/users?q=${encodeURIComponent(q)}`);
+  const users = await res.json();
+  const box = document.getElementById('members-container');
+  if(!users.length) { box.innerHTML = '<div class="card" style="text-align:center;">No matching members found.</div>'; return; }
+  box.innerHTML = users.map(u => `
+    <div class="item-card">
+      <div>
+        <div style="font-weight:800;font-size:0.92rem;">${u.full_name} <small style="color:#64748b;">(@${u.username})</small></div>
+        <div style="font-size:0.78rem;color:#64748b;">Phone: ${u.phone} | Type: <b>${u.user_type}</b> | Wallet: <b style="color:#059669;">₦${(u.wallet_balance || 0).toLocaleString()}</b></div>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn-act btn-edit" onclick="openAdminEditModal(${u.id}, '${u.full_name.replace(/'/g, "\\'")}', '${u.phone}', '${u.user_type}', ${u.wallet_balance || 0}, '${(u.occupation||'').replace(/'/g, "\\'")}')">Edit Profile</button>
         ${u.user_type !== 'Admin' ? `<button class="btn-act btn-del" onclick="deleteMember(${u.id})">Delete</button>` : ''}
-      </td>
-    </tr>
+      </div>
+    </div>
   `).join('');
-}
-
-function filterAdminMembers(q) {
-  q = q.toLowerCase().trim();
-  if(!q) { renderMembersTable(cachedMembers); return; }
-  const filtered = cachedMembers.filter(u => 
-    u.full_name.toLowerCase().includes(q) ||
-    u.username.toLowerCase().includes(q) ||
-    u.phone.includes(q)
-  );
-  renderMembersTable(filtered);
 }
 
 function openAdminEditModal(id, name, phone, type, wallet, occupation) {
@@ -3347,22 +3364,25 @@ async function deleteMember(uid) {
   loadAdminOverview();
 }
 
-async function loadPartnerRequests() {
-  const res = await fetch('/api/admin/partner-requests');
+/* SEARCHABLE CPN CLAIMS */
+async function searchAdminPartners(q) {
+  const res = await fetch(`/api/admin/partner-requests?q=${encodeURIComponent(q)}`);
   const reqs = await res.json();
-  const body = document.getElementById('partner-reqs-body');
-  body.innerHTML = reqs.map(r => `
-    <tr>
-      <td><b>${r.full_name}</b> (@${r.username})</td>
-      <td>₦${r.amount.toLocaleString()}</td>
-      <td>${r.reference_note}</td>
-      <td>
+  const box = document.getElementById('partners-container');
+  if(!reqs.length) { box.innerHTML = '<div class="card" style="text-align:center;">No CPN requests found.</div>'; return; }
+  box.innerHTML = reqs.map(r => `
+    <div class="item-card">
+      <div>
+        <div style="font-weight:800;">${r.full_name} <small style="color:#64748b;">(@${r.username})</small></div>
+        <div style="font-size:0.78rem;">Amount: <b>₦${r.amount.toLocaleString()}</b> | Ref: ${r.reference_note}</div>
+      </div>
+      <div>
         ${r.status === 'pending' ? `
           <button class="btn-act btn-app" onclick="actPartnerReq(${r.id}, 'approve')">Approve</button>
           <button class="btn-act btn-rej" onclick="actPartnerReq(${r.id}, 'reject')">Reject</button>
         ` : `<b>${r.status.toUpperCase()}</b>`}
-      </td>
-    </tr>
+      </div>
+    </div>
   `).join('');
 }
 
@@ -3375,22 +3395,25 @@ async function actPartnerReq(id, action) {
   loadAdminOverview();
 }
 
-async function loadPayouts() {
-  const res = await fetch('/api/admin/payouts');
+/* SEARCHABLE CASHOUTS */
+async function searchAdminPayouts(q) {
+  const res = await fetch(`/api/admin/payouts?q=${encodeURIComponent(q)}`);
   const payouts = await res.json();
-  const body = document.getElementById('payouts-body');
-  body.innerHTML = payouts.map(p => `
-    <tr>
-      <td><b>${p.full_name}</b></td>
-      <td>₦${p.amount.toLocaleString()}</td>
-      <td>${p.bank_name} (${p.account_number})</td>
-      <td>
+  const box = document.getElementById('payouts-container');
+  if(!payouts.length) { box.innerHTML = '<div class="card" style="text-align:center;">No cashout requests found.</div>'; return; }
+  box.innerHTML = payouts.map(p => `
+    <div class="item-card">
+      <div>
+        <div style="font-weight:800;">${p.full_name}</div>
+        <div style="font-size:0.78rem;">Amount: <b style="color:#059669;">₦${p.amount.toLocaleString()}</b> | Bank: <b>${p.bank_name} (${p.account_number})</b></div>
+      </div>
+      <div>
         ${p.status === 'pending' ? `
           <button class="btn-act btn-app" onclick="updatePayout(${p.id}, 'approved')">Approve</button>
           <button class="btn-act btn-rej" onclick="updatePayout(${p.id}, 'rejected')">Reject</button>
         ` : `<b>${p.status.toUpperCase()}</b>`}
-      </td>
-    </tr>
+      </div>
+    </div>
   `).join('');
 }
 
@@ -3400,7 +3423,7 @@ async function updatePayout(id, status) {
     headers:{'Content-Type':'application/json'},
     body: JSON.stringify({payout_id: id, status: status})
   });
-  loadPayouts();
+  loadAdminOverview();
 }
 
 loadAdminOverview();
@@ -3455,7 +3478,6 @@ def auth_page():
 def admin_page():
     return render_template_string(ADMIN_TEMPLATE, contact_email=CONTACT_EMAIL, company_name=COMPANY_NAME)
 
-# GLOBAL ERROR HANDLER FOR SYSTEM RELIABILITY
 @app.errorhandler(500)
 def internal_server_error(e):
     logger.error(f"Internal Server Error: {e}")
