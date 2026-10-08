@@ -148,7 +148,7 @@ def count_user_listings(user_id):
     ad_post_count = cursor.fetchone()[0]
     return prod_count + ad_post_count
 
-# HARDCODED SEEDING
+# SEEDING ROUTINE
 def seed_hardcoded_data(cursor, db):
     logger.info("Executing persistent seeding...")
     p = query_param()
@@ -437,7 +437,13 @@ def init_db():
         try:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users (LOWER(username))")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_phone ON users (phone)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_users_ref ON users (referral_code)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_type_group ON posts (post_type, group_id, id DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_posts_user ON posts (user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_events_group ON events (group_id, id DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_post_likes ON post_likes (post_id, user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_comments_post ON comments (post_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_followers_pair ON followers (follower_id, followed_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_pair ON messages (sender_id, receiver_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_unread ON messages (receiver_id, is_read)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_notifications_unread ON notifications (user_id, is_read)")
@@ -1385,7 +1391,226 @@ def chat_thread(username):
     return jsonify({'success': True, 'other': dict(other), 'messages': messages, 'me_id': uid})
 
 # ======================================================================
-# FRONTEND TEMPLATE
+# SEARCHABLE ADMIN API
+# ======================================================================
+@app.route('/api/admin/overview', methods=['GET'])
+def get_admin_overview():
+    admin, err = require_admin()
+    if err: return err
+    db = get_db()
+    cursor = db.cursor()
+
+    cursor.execute("SELECT COUNT(*) FROM users")
+    total_users = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM users WHERE user_type = 'CPN Partner'")
+    total_partners = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM products")
+    total_products = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM posts")
+    total_posts = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM groups")
+    total_pages = cursor.fetchone()[0]
+    cursor.execute("SELECT COALESCE(SUM(wallet_balance), 0) FROM users")
+    total_wallets = float(cursor.fetchone()[0] or 0)
+    cursor.execute("SELECT COUNT(*) FROM partner_requests WHERE status = 'pending'")
+    pending_partners = cursor.fetchone()[0]
+    cursor.execute("SELECT COALESCE(SUM(amount), 0) FROM partner_requests WHERE status = 'approved'")
+    total_gross_income = float(cursor.fetchone()[0] or 0)
+    cursor.execute("SELECT COALESCE(SUM(amount), 0) FROM payout_requests WHERE status = 'approved'")
+    total_approved_payouts = float(cursor.fetchone()[0] or 0)
+    admin_net_balance = total_gross_income - total_approved_payouts
+
+    return jsonify({
+        'success': True,
+        'total_users': total_users,
+        'total_partners': total_partners,
+        'total_products': total_products,
+        'total_posts': total_posts,
+        'total_pages': total_pages,
+        'total_partner_wallets': total_wallets,
+        'pending_partners': pending_partners,
+        'total_gross_income': total_gross_income,
+        'total_approved_payouts': total_approved_payouts,
+        'admin_net_balance': admin_net_balance
+    })
+
+@app.route('/api/admin/posts', methods=['GET', 'DELETE'])
+def admin_manage_posts():
+    admin, err = require_admin()
+    if err: return err
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'DELETE':
+        post_id = request.args.get('post_id')
+        if not post_id:
+            return jsonify({'success': False, 'message': 'Post ID required.'}), 400
+        cursor.execute(f"DELETE FROM comments WHERE post_id = {p}", (post_id,))
+        cursor.execute(f"DELETE FROM post_likes WHERE post_id = {p}", (post_id,))
+        cursor.execute(f"DELETE FROM posts WHERE id = {p}", (post_id,))
+        db.commit()
+        return jsonify({'success': True, 'message': 'Post deleted successfully.'})
+
+    q = request.args.get('q', '').strip().lower()
+    sql = '''
+        SELECT p.id, p.content, p.post_type, p.image_url, p.created_at,
+        u.full_name, u.username, g.name AS group_name
+        FROM posts p
+        JOIN users u ON p.user_id = u.id
+        LEFT JOIN groups g ON p.group_id = g.id
+    '''
+    if q:
+        sql += f" WHERE LOWER(u.full_name) LIKE {p} OR LOWER(u.username) LIKE {p} OR LOWER(p.content) LIKE {p}"
+        sql += " ORDER BY p.id DESC LIMIT 50"
+        cursor.execute(sql, (f"%{q}%", f"%{q}%", f"%{q}%"))
+    else:
+        sql += " ORDER BY p.id DESC LIMIT 50"
+        cursor.execute(sql)
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+@app.route('/api/admin/users', methods=['GET', 'DELETE'])
+def admin_manage_users():
+    admin, err = require_admin()
+    if err: return err
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'DELETE':
+        user_id = request.args.get('user_id')
+        if not user_id:
+            return jsonify({'success': False, 'message': 'User ID required.'}), 400
+        cursor.execute(f"DELETE FROM comments WHERE user_id = {p}", (user_id,))
+        cursor.execute(f"DELETE FROM post_likes WHERE user_id = {p}", (user_id,))
+        cursor.execute(f"DELETE FROM posts WHERE user_id = {p}", (user_id,))
+        cursor.execute(f"DELETE FROM products WHERE user_id = {p}", (user_id,))
+        cursor.execute(f"DELETE FROM messages WHERE sender_id = {p} OR receiver_id = {p}", (user_id, user_id))
+        cursor.execute(f"DELETE FROM followers WHERE follower_id = {p} OR followed_id = {p}", (user_id, user_id))
+        cursor.execute(f"DELETE FROM users WHERE id = {p}", (user_id,))
+        db.commit()
+        return jsonify({'success': True, 'message': 'Member removed.'})
+
+    q = request.args.get('q', '').strip().lower()
+    sql = "SELECT id, full_name, username, phone, user_type, wallet_balance, occupation FROM users"
+    if q:
+        sql += f" WHERE LOWER(full_name) LIKE {p} OR LOWER(username) LIKE {p} OR phone LIKE {p}"
+        sql += " ORDER BY id DESC LIMIT 50"
+        cursor.execute(sql, (f"%{q}%", f"%{q}%", f"%{q}%"))
+    else:
+        sql += " ORDER BY id DESC LIMIT 50"
+        cursor.execute(sql)
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+@app.route('/api/admin/users/update', methods=['POST'])
+def admin_update_user():
+    admin, err = require_admin()
+    if err: return err
+    data = request.json or {}
+    uid = data.get('user_id')
+    if not uid:
+        return jsonify({'success': False, 'message': 'User ID required.'}), 400
+
+    full_name = data.get('full_name', '').strip()
+    phone = data.get('phone', '').strip()
+    user_type = data.get('user_type', 'Resident').strip()
+    occupation = data.get('occupation', '').strip()
+    try:
+        wallet_balance = float(data.get('wallet_balance', 0.0))
+    except (ValueError, TypeError):
+        wallet_balance = 0.0
+
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    cursor.execute(f'''
+        UPDATE users
+        SET full_name = {p}, phone = {p}, user_type = {p}, wallet_balance = {p}, occupation = {p}
+        WHERE id = {p}
+    ''', (full_name, phone, user_type, wallet_balance, occupation, uid))
+    db.commit()
+    return jsonify({'success': True, 'message': 'Member profile updated successfully!'})
+
+@app.route('/api/admin/partner-requests', methods=['GET', 'POST'])
+def admin_partner_requests():
+    admin, err = require_admin()
+    if err: return err
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'POST':
+        data = request.json or {}
+        req_id = data.get('request_id')
+        action = data.get('action')
+
+        cursor.execute(f"SELECT user_id FROM partner_requests WHERE id = {p}", (req_id,))
+        req = cursor.fetchone()
+        if not req:
+            return jsonify({'success': False, 'message': 'Request not found.'}), 404
+
+        uid = req['user_id']
+        if action == 'approve':
+            cursor.execute(f"UPDATE users SET user_type = 'CPN Partner', is_verified_merchant = 1 WHERE id = {p}", (uid,))
+            cursor.execute(f"UPDATE partner_requests SET status = 'approved' WHERE id = {p}", (req_id,))
+            db.commit()
+            process_cpn_commission(uid, upgrade_fee=2000.0)
+            add_notification(uid, 0, 'system', 0, "Congratulations! Your CPN Partner upgrade has been approved!")
+            return jsonify({'success': True, 'message': 'Member approved as CPN Partner!'})
+        else:
+            cursor.execute(f"UPDATE partner_requests SET status = 'rejected' WHERE id = {p}", (req_id,))
+            db.commit()
+            return jsonify({'success': True, 'message': 'Partner claim rejected.'})
+
+    q = request.args.get('q', '').strip().lower()
+    sql = 'SELECT pr.*, u.full_name, u.phone, u.username FROM partner_requests pr JOIN users u ON pr.user_id = u.id'
+    if q:
+        sql += f" WHERE LOWER(u.full_name) LIKE {p} OR LOWER(u.username) LIKE {p} OR LOWER(pr.reference_note) LIKE {p}"
+        sql += " ORDER BY pr.id DESC LIMIT 50"
+        cursor.execute(sql, (f"%{q}%", f"%{q}%", f"%{q}%"))
+    else:
+        sql += " ORDER BY pr.id DESC LIMIT 50"
+        cursor.execute(sql)
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+@app.route('/api/admin/payouts', methods=['GET', 'POST'])
+def manage_payouts():
+    admin, err = require_admin()
+    if err: return err
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'POST':
+        data = request.json or {}
+        payout_id = data.get('payout_id')
+        new_status = data.get('status', 'approved')
+
+        if new_status == 'rejected':
+            cursor.execute(f"SELECT user_id, amount FROM payout_requests WHERE id = {p}", (payout_id,))
+            req = cursor.fetchone()
+            if req:
+                cursor.execute(f"UPDATE users SET wallet_balance = wallet_balance + {p} WHERE id = {p}",
+                               (float(req['amount'] or 0), req['user_id']))
+
+        cursor.execute(f"UPDATE payout_requests SET status = {p} WHERE id = {p}", (new_status, payout_id))
+        db.commit()
+        return jsonify({'success': True, 'message': f'Payout marked as {new_status}.'})
+
+    q = request.args.get('q', '').strip().lower()
+    sql = 'SELECT pr.*, u.full_name, u.phone, u.username FROM payout_requests pr JOIN users u ON pr.user_id = u.id'
+    if q:
+        sql += f" WHERE LOWER(u.full_name) LIKE {p} OR LOWER(u.username) LIKE {p} OR LOWER(pr.bank_name) LIKE {p} OR pr.account_number LIKE {p}"
+        sql += " ORDER BY pr.id DESC LIMIT 50"
+        cursor.execute(sql, (f"%{q}%", f"%{q}%", f"%{q}%", f"%{q}%"))
+    else:
+        sql += " ORDER BY pr.id DESC LIMIT 50"
+        cursor.execute(sql)
+    return jsonify([dict(r) for r in cursor.fetchall()])
+
+# ======================================================================
+# FRONTEND TEMPLATES
 # ======================================================================
 INDEX_TEMPLATE = r"""
 <!DOCTYPE html>
@@ -1396,7 +1621,7 @@ INDEX_TEMPLATE = r"""
     <title>{{ meta_title }}</title>
     <meta name="description" content="{{ meta_desc }}">
 
-    <!-- DYNAMIC SOCIAL PREVIEW META TAGS (OPEN GRAPH & TWITTER) -->
+    <!-- Open Graph Sharing Tags -->
     <meta property="og:site_name" content="Ijebu Connect">
     <meta property="og:title" content="{{ meta_title }}">
     <meta property="og:description" content="{{ meta_desc }}">
@@ -1404,6 +1629,7 @@ INDEX_TEMPLATE = r"""
     <meta property="og:url" content="{{ meta_url }}">
     <meta property="og:type" content="website">
 
+    <!-- Twitter Card Tags -->
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="{{ meta_title }}">
     <meta name="twitter:description" content="{{ meta_desc }}">
@@ -1429,7 +1655,7 @@ INDEX_TEMPLATE = r"""
         #toast-container { position: fixed; top: 12px; right: 12px; left: 12px; z-index: 9999; pointer-events:none; }
         .toast { background: var(--navy-blue); color: #fff; padding: 12px; border-radius: 12px; margin-bottom: 8px; font-size: 0.85rem; font-weight: 600; text-align: center; box-shadow: 0 4px 12px rgba(0,0,0,0.2); }
 
-        /* HEADER & LAYOUT */
+        /* ULTRA RESPONSIVE MOBILE HEADER & SEARCH BAR */
         header { background: #fff; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--border-light); position: sticky; top:0; z-index: 100; display: flex; flex-direction: column; gap: 8px; }
         .header-top-row { display: flex; justify-content: space-between; align-items: center; width: 100%; }
         .header-brand { display: flex; align-items: center; gap: 8px; cursor: pointer; flex-shrink: 0; }
@@ -1450,7 +1676,7 @@ INDEX_TEMPLATE = r"""
         .header-logout-btn { background: #ef4444; color: #fff; border: none; padding: 2px 8px; border-radius: 10px; font-size: 0.65rem; font-weight: 800; cursor: pointer; line-height: 1.2; text-transform: uppercase; }
         .header-logout-btn:hover { background: #dc2626; }
 
-        /* NOTIFICATIONS DROPDOWN */
+        /* NOTIFICATION DROPDOWN */
         .notif-dropdown { display: none; position: absolute; top: 46px; right: 0; width: 310px; max-height: 400px; overflow-y: auto; background: #fff; border-radius: 12px; border: 1px solid var(--border-light); box-shadow: 0 4px 16px rgba(0,0,0,0.15); z-index: 1100; padding: 8px; }
         .notif-item { padding: 10px; border-bottom: 1px solid #f0f2f5; display: flex; gap: 10px; align-items: center; font-size: 0.8rem; cursor: pointer; border-radius: 8px; }
         .notif-item:hover { background: #f8fafc; }
@@ -1468,10 +1694,10 @@ INDEX_TEMPLATE = r"""
         .view-section.active { display: block; }
         .card { background: #fff; border: 1px solid var(--border-light); border-radius: 12px; padding: 1rem; margin-bottom: 0.85rem; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
 
+        /* CLICKABLE USER NAMES */
         .clickable-name { cursor: pointer; color: var(--navy-blue); font-weight: 800; }
         .clickable-name:hover { text-decoration: underline; color: var(--fb-blue); }
 
-        /* PROFILE BANNER & AVATAR */
         .fb-group-banner { height: 160px; background: linear-gradient(135deg, #1877f2, #0b1e36); border-radius: 12px 12px 0 0; position: relative; margin: -1rem -1rem 45px -1rem; background-size: cover; background-position: center; }
         .fb-group-avatar { position: absolute; bottom: -35px; left: 16px; width: 75px; height: 75px; border-radius: 16px; border: 4px solid #fff; background: var(--fb-blue); overflow: hidden; color: #fff; display: flex; align-items: center; justify-content: center; font-size: 1.8rem; font-weight: 800; }
 
@@ -1482,6 +1708,11 @@ INDEX_TEMPLATE = r"""
         .post-actions { display: flex; gap: 6px; padding-top: 8px; margin-top: 8px; border-top: 1px solid var(--border-light); }
         .post-action-btn { flex: 1; background: none; border: none; padding: 8px; border-radius: 6px; font-size: 0.8rem; font-weight: 700; color: var(--text-muted); cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 4px; }
         .post-action-btn:hover { background: #f0f2f5; }
+
+        .group-badge { background: #e7f3ff; color: var(--fb-blue); font-size: 0.72rem; font-weight: 800; padding: 2px 8px; border-radius: 10px; margin-left: auto; cursor: pointer; }
+        .comments-box { background: #f8fafc; border-radius: 8px; padding: 8px; margin-top: 8px; }
+        .comment-item { border-bottom: 1px solid #e2e8f0; padding: 6px 0; font-size: 0.82rem; }
+        .comment-reply-item { margin-left: 18px; padding-left: 8px; border-left: 2px solid var(--fb-blue); }
 
         .btn-submit { background: var(--fb-blue); color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 700; font-size: 0.88rem; cursor: pointer; width: 100%; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
         .btn-secondary { background: var(--navy-blue); color: #fff; }
@@ -1529,6 +1760,8 @@ INDEX_TEMPLATE = r"""
             <div id="header-auth"></div>
         </div>
     </div>
+
+    <!-- PROMINENT GLOBAL SEARCH BAR -->
     <div class="global-search-wrap">
         <i class="fa-solid fa-magnifying-glass global-search-icon"></i>
         <input type="text" class="global-search-input" placeholder="🔍 Search members, pages, posts..." onkeyup="handleGlobalSearch(this.value)">
@@ -1544,7 +1777,10 @@ INDEX_TEMPLATE = r"""
     </div>
     <div class="nav-pill" data-nav="events" onclick="switchNav('events')"><i class="fa-solid fa-calendar-days"></i> Events</div>
     <div class="nav-pill" data-nav="market" onclick="switchNav('market')"><i class="fa-solid fa-store"></i> Market</div>
+    <div class="nav-pill" data-nav="beauty" onclick="switchNav('beauty')"><i class="fa-solid fa-scissors"></i> Beauty</div>
+    <div class="nav-pill" data-nav="jobs" onclick="switchNav('jobs')"><i class="fa-solid fa-briefcase"></i> Jobs</div>
     <div class="nav-pill" data-nav="dating" onclick="switchNav('dating')"><i class="fa-solid fa-heart" style="color:#ef4444;"></i> Dating</div>
+    <div class="nav-pill" id="admin-pill" style="display:none;" onclick="window.location.href='/admin'"><i class="fa-solid fa-gear"></i> Admin Panel</div>
 </div>
 
 <div class="app-container">
@@ -1634,6 +1870,24 @@ INDEX_TEMPLATE = r"""
         <div id="products-container" class="card"></div>
     </div>
 
+    <!-- BEAUTY & FASHION -->
+    <div id="view-beauty" class="view-section">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <h3 style="font-size:1rem;font-weight:800;">Beauty & Fashion</h3>
+            <button onclick="startSellItem('Beauty')" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.78rem;">+ Add Service</button>
+        </div>
+        <div id="beauty-container" class="card"></div>
+    </div>
+
+    <!-- JOBS -->
+    <div id="view-jobs" class="view-section">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <h3 style="font-size:1rem;font-weight:800;">Jobs & Artisans</h3>
+            <button onclick="startSellItem('Jobs')" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.78rem;">+ Post Skill</button>
+        </div>
+        <div id="jobs-container" class="card"></div>
+    </div>
+
     <!-- DATING -->
     <div id="view-dating" class="view-section">
         <div class="card" style="background:linear-gradient(135deg, #4f46e5, #7c3aed);color:#fff;">
@@ -1651,8 +1905,68 @@ INDEX_TEMPLATE = r"""
     </div>
 </div>
 
-<!-- ALL SYSTEM MODALS -->
-<!-- EDIT PROFILE MODAL -->
+<!-- ====================================================================== -->
+<!-- ALL MODALS FULLY RESTORED -->
+<!-- ====================================================================== -->
+
+<!-- 1. MULTI-PURPOSE SELL / LISTING MODAL -->
+<div id="sell-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+    <div class="card" style="max-width:440px;width:100%;max-height:90vh;overflow-y:auto;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <h3 style="font-weight:800;color:var(--navy-blue);" id="modal-sell-title">Publish Listing</h3>
+            <button onclick="closeSellModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+        </div>
+        <form onsubmit="handleProductSubmit(event)">
+            <input type="hidden" id="prod-type" value="Market">
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Title</label><input type="text" class="form-control" id="prod-title" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Category</label><input type="text" class="form-control" id="prod-category" placeholder="e.g. Electronics, Fashion, Artisans" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Price (₦)</label><input type="number" class="form-control" id="prod-price" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">WhatsApp Contact</label><input type="text" class="form-control" id="prod-whatsapp" placeholder="e.g. 09018363715" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Upload Photo/Video</label><input type="file" id="prod-img-file" class="form-control" accept="image/*,video/*"></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea class="form-control" id="prod-desc" rows="2"></textarea></div>
+            <button type="submit" class="btn-submit">Publish Item</button>
+        </form>
+    </div>
+</div>
+
+<!-- 2. EVENT MODAL -->
+<div id="event-create-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+    <div class="card" style="max-width:440px;width:100%;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <h3 style="font-weight:800;color:var(--navy-blue);">Create Event</h3>
+            <button onclick="closeEventModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+        </div>
+        <form onsubmit="handleEventSubmit(event)">
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Event Title</label><input type="text" id="evt-title" class="form-control" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Date & Time</label><input type="text" id="evt-date" class="form-control" placeholder="e.g. Saturday, Oct 25 at 4:00 PM"></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Location</label><input type="text" id="evt-location" class="form-control" placeholder="e.g. Ijebu Imusin"></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Event Banner</label><input type="file" id="evt-image-file" class="form-control" accept="image/*"></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea id="evt-desc" class="form-control" rows="2"></textarea></div>
+            <button type="submit" class="btn-submit">Publish Event</button>
+        </form>
+    </div>
+</div>
+
+<!-- 3. DATING SETTINGS MODAL -->
+<div id="dating-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+    <div class="card" style="max-width:420px;width:100%;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <h3 style="font-weight:800;color:var(--navy-blue);">❤️ Dating Profile Settings</h3>
+            <button onclick="closeDatingModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+        </div>
+        <form onsubmit="handleDatingProfileSubmit(event)">
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Age</label><input type="number" id="dt-age" class="form-control" value="24" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Gender</label><select id="dt-gender" class="form-control"><option value="Female">Female</option><option value="Male">Male</option></select></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Looking For</label><select id="dt-intent" class="form-control"><option value="Dating & Relationship">Dating & Relationship</option><option value="Marriage">Marriage</option><option value="Networking & Friends">Networking & Friends</option></select></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Occupation</label><input type="text" id="dt-occupation" class="form-control"></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Bio</label><textarea id="dt-bio" class="form-control" rows="2"></textarea></div>
+            <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;"><input type="checkbox" id="dt-active" checked><label for="dt-active" style="font-size:0.8rem;">Show on Dating Feed</label></div>
+            <button type="submit" class="btn-submit">Save Dating Profile</button>
+        </form>
+    </div>
+</div>
+
+<!-- 4. EDIT PROFILE MODAL -->
 <div id="edit-profile-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
     <div class="card" style="max-width:440px;width:100%;max-height:90vh;overflow-y:auto;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
@@ -1677,27 +1991,7 @@ INDEX_TEMPLATE = r"""
     </div>
 </div>
 
-<!-- MULTI-PURPOSE SELL / LISTING MODAL -->
-<div id="sell-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
-    <div class="card" style="max-width:440px;width:100%;max-height:90vh;overflow-y:auto;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
-            <h3 style="font-weight:800;color:var(--navy-blue);" id="modal-sell-title">Publish Listing</h3>
-            <button onclick="closeSellModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
-        </div>
-        <form onsubmit="handleProductSubmit(event)">
-            <input type="hidden" id="prod-type" value="Market">
-            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Title</label><input type="text" class="form-control" id="prod-title" required></div>
-            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Category</label><input type="text" class="form-control" id="prod-category" placeholder="e.g. Electronics, Fashion, Artisans" required></div>
-            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Price (₦)</label><input type="number" class="form-control" id="prod-price" required></div>
-            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">WhatsApp Contact</label><input type="text" class="form-control" id="prod-whatsapp" placeholder="e.g. 09018363715" required></div>
-            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Upload Photo/Video</label><input type="file" id="prod-img-file" class="form-control" accept="image/*,video/*"></div>
-            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea class="form-control" id="prod-desc" rows="2"></textarea></div>
-            <button type="submit" class="btn-submit">Publish Item</button>
-        </form>
-    </div>
-</div>
-
-<!-- CPN UPGRADE MODAL -->
+<!-- 5. CPN UPGRADE MODAL -->
 <div id="cpn-upgrade-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
     <div class="card" style="max-width:420px;width:100%;">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
@@ -1715,6 +2009,24 @@ INDEX_TEMPLATE = r"""
         <form onsubmit="handleClaimBankTransfer(event)">
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Sender Name / Reference Note</label><input type="text" id="cpn-ref-note" class="form-control" placeholder="e.g. Paid via OPay / John Doe" required></div>
             <button type="submit" class="btn-submit">Submit Payment Claim</button>
+        </form>
+    </div>
+</div>
+
+<!-- 6. CREATE/EDIT PAGE MODAL -->
+<div id="page-create-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.65);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+    <div class="card" style="max-width:440px;width:100%;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:0.75rem;">
+            <h3 style="font-weight:800;" id="page-modal-title">Create Page</h3>
+            <button onclick="closePageModal()" style="background:none;border:none;font-size:1.5rem;">&times;</button>
+        </div>
+        <form onsubmit="handlePageSubmit(event)">
+            <input type="hidden" id="edit-page-id" value="0">
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Page Name</label><input type="text" id="page-name" class="form-control" required></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Page Profile Photo (Avatar)</label><input type="file" id="page-avatar-file" class="form-control" accept="image/*"></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Page Cover Banner</label><input type="file" id="page-cover-file" class="form-control" accept="image/*"></div>
+            <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea id="page-desc" class="form-control" rows="2"></textarea></div>
+            <button type="submit" class="btn-submit">Save Page Details</button>
         </form>
     </div>
 </div>
@@ -1740,6 +2052,7 @@ INDEX_TEMPLATE = r"""
 <script>
 let currentUser = null;
 let activePageId = 0;
+let replyParentCommentId = 0;
 let activeChatPartner = null;
 
 function showToast(msg, type = 'success') {
@@ -1778,6 +2091,8 @@ function switchNav(target) {
     if(target === 'chat') loadChatPartners();
     if(target === 'events') loadEventsFeed();
     if(target === 'market') loadCategoryListings('Market', 'products-container');
+    if(target === 'beauty') loadCategoryListings('Beauty', 'beauty-container');
+    if(target === 'jobs') loadCategoryListings('Jobs', 'jobs-container');
     if(target === 'dating') loadDatingMatches();
 }
 
@@ -1790,6 +2105,9 @@ async function checkSession() {
             renderHeaderAuth();
             updateUnreadChatBadges(currentUser.unread_chats || 0);
             loadNotifications();
+            if(currentUser.user_type === 'Admin') {
+                document.getElementById('admin-pill').style.display = 'flex';
+            }
         } else {
             currentUser = null;
             renderHeaderAuth();
@@ -1798,7 +2116,7 @@ async function checkSession() {
     } catch(e){}
 }
 
-/* NOTIFICATIONS WITH DIRECT NAVIGATION */
+/* NOTIFICATIONS ENGINE WITH DIRECT NAVIGATION */
 async function loadNotifications() {
     if(!currentUser) return;
     try {
@@ -1869,7 +2187,7 @@ function updateUnreadChatBadges(count) {
     });
 }
 
-/* HEADER WITH LOGOUT BUTTON DIRECTLY ON TOP OF USERNAME */
+/* HEADER USER & LOGOUT - LOGOUT ON TOP OF NAME */
 function renderHeaderAuth() {
     const box = document.getElementById('header-auth');
     if(currentUser) {
@@ -1889,7 +2207,65 @@ async function handleLogout() {
     window.location.href = '/auth';
 }
 
-/* CHAT THREAD WITH WHATSAPP-STYLE MARKS */
+/* GLOBAL SEARCH JS ENGINE */
+async function handleGlobalSearch(q) {
+    q = q.trim();
+    if(!q) {
+        if(document.getElementById('view-search').classList.contains('active')) switchNav('feed');
+        return;
+    }
+    switchNav('search');
+    const container = document.getElementById('search-results-container');
+    container.innerHTML = '<div style="text-align:center;padding:1rem;"><i class="fa-solid fa-spinner fa-spin"></i> Searching...</div>';
+
+    const res = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    const data = await res.json();
+    let html = '';
+
+    if(data.users && data.users.length) {
+        html += `<h4 style="font-size:0.88rem;margin-bottom:6px;color:var(--text-muted);">Registered Members</h4>`;
+        html += data.users.map(u => `
+            <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;gap:10px;">
+                    <div class="avatar" style="width:40px;height:40px;background:var(--fb-blue);" onclick="openProfile('${u.username}')">
+                        ${u.avatar_url ? `<img src="${u.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : u.full_name.charAt(0)}
+                    </div>
+                    <div>
+                        <h4 class="clickable-name" style="font-size:0.88rem;" onclick="openProfile('${u.username}')">${u.full_name}</h4>
+                        <p style="font-size:0.72rem;color:var(--text-muted);">@${u.username} • ${u.occupation || u.user_type}</p>
+                    </div>
+                </div>
+                <div style="display:flex;gap:4px;">
+                    <button onclick="startChatWith('${u.username}')" class="btn-submit" style="width:auto;padding:4px 10px;font-size:0.75rem;background:var(--navy-blue);">Message</button>
+                    <button onclick="openProfile('${u.username}')" class="btn-submit" style="width:auto;padding:4px 10px;font-size:0.75rem;">Profile</button>
+                </div>
+            </div>
+        `).join('');
+    }
+
+    if(data.pages && data.pages.length) {
+        html += `<h4 style="font-size:0.88rem;margin:12px 0 6px;color:var(--text-muted);">Pages & Groups</h4>`;
+        html += data.pages.map(g => `
+            <div class="card" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+                <div style="display:flex;align-items:center;gap:10px;cursor:pointer;" onclick="openPageDetail(${g.id})">
+                    ${g.avatar_url ? `<img src="${g.avatar_url}" style="width:40px;height:40px;border-radius:10px;object-fit:cover;">` : `<div class="avatar" style="width:40px;height:40px;border-radius:10px;background:var(--fb-blue);"><i class="fa-solid fa-flag"></i></div>`}
+                    <div>
+                        <h4 style="font-weight:800;font-size:0.88rem;">${g.name}</h4>
+                        <p style="font-size:0.72rem;color:var(--text-muted);">${g.member_count} Followers</p>
+                    </div>
+                </div>
+                <button onclick="openPageDetail(${g.id})" class="btn-submit" style="width:auto;padding:4px 10px;font-size:0.75rem;">Visit Page</button>
+            </div>
+        `).join('');
+    }
+
+    if(!html) {
+        html = `<div class="card" style="text-align:center;">No matching members or pages found for "${q}".</div>`;
+    }
+    container.innerHTML = html;
+}
+
+/* CHAT ENGINE WITH WHATSAPP TICKS */
 async function loadChatPartners() {
     if(!currentUser) return window.location.href = '/auth';
     const res = await fetch('/api/chat/partners');
@@ -1956,7 +2332,7 @@ async function openChatThread(username) {
         msgsBox.innerHTML = data.messages.map(m => {
             const isMe = m.sender_id === data.me_id;
             
-            // WHATSAPP-STYLE MARKS
+            // WHATSAPP TICKS
             let ticksHtml = '';
             if(isMe) {
                 if(m.is_read) {
@@ -2012,7 +2388,184 @@ async function sendChatMessage(e) {
     }
 }
 
-/* RESTORED COMPLETE MEMBER PROFILE ENGINE */
+/* SELL / PRODUCT LISTING HANDLERS */
+function startSellItem(type = 'Market') {
+    if(!currentUser) return window.location.href = '/auth';
+    document.getElementById('prod-type').value = type;
+    document.getElementById('modal-sell-title').innerText = type === 'Market' ? 'Publish Marketplace Item' : (type === 'Beauty' ? 'Add Beauty & Fashion Service' : 'Post Job / Skill Listing');
+    document.getElementById('sell-modal').style.display = 'flex';
+}
+
+function closeSellModal() { document.getElementById('sell-modal').style.display = 'none'; }
+
+async function handleProductSubmit(e) {
+    e.preventDefault();
+    const type = document.getElementById('prod-type').value;
+    const fileInput = document.getElementById('prod-img-file');
+    let uploadedImg = '', uploadedVid = '';
+
+    if(fileInput && fileInput.files[0]) {
+        const upload = await uploadSelectedFile(fileInput);
+        if(upload.is_video) uploadedVid = upload.url;
+        else uploadedImg = upload.url;
+    }
+
+    const res = await fetch('/api/products', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({
+            title: document.getElementById('prod-title').value,
+            category: document.getElementById('prod-category').value,
+            price: document.getElementById('prod-price').value,
+            whatsapp_number: document.getElementById('prod-whatsapp').value,
+            description: document.getElementById('prod-desc').value,
+            listing_type: type,
+            image_url: uploadedImg,
+            video_url: uploadedVid
+        })
+    });
+    const data = await res.json();
+    showToast(data.message);
+    if(data.success) {
+        closeSellModal();
+        if(type === 'Market') loadCategoryListings('Market', 'products-container');
+        if(type === 'Beauty') loadCategoryListings('Beauty', 'beauty-container');
+        if(type === 'Jobs') loadCategoryListings('Jobs', 'jobs-container');
+    } else if(data.requires_upgrade) {
+        closeSellModal();
+        document.getElementById('cpn-upgrade-modal').style.display = 'flex';
+    }
+}
+
+async function loadCategoryListings(type, containerId) {
+    const res = await fetch(`/api/products?type=${type}`);
+    const items = await res.json();
+    const c = document.getElementById(containerId);
+    if(!items.length) { c.innerHTML = '<div style="text-align:center;padding:1rem;">No listings found.</div>'; return; }
+    c.innerHTML = items.map(p => `
+        <div style="border-bottom:1px solid var(--border-light);padding-bottom:10px;margin-bottom:10px;display:flex;gap:10px;align-items:center;">
+            ${p.image_url ? `<img src="${p.image_url}" style="width:70px;height:70px;border-radius:8px;object-fit:cover;">` : `<div style="width:70px;height:70px;background:#f0f2f5;border-radius:8px;display:flex;align-items:center;justify-content:center;"><i class="fa-solid fa-store"></i></div>`}
+            <div style="flex:1;">
+                <h4 style="font-weight:800;font-size:0.9rem;">${p.title}</h4>
+                <div style="color:var(--emerald-green);font-weight:800;font-size:0.85rem;">₦${p.price.toLocaleString()}</div>
+                <div style="font-size:0.72rem;color:var(--text-muted);">${p.category} • <span class="clickable-name" onclick="openProfile('${p.seller_username}')">@${p.seller_username}</span></div>
+            </div>
+            <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" style="background:#25d366;color:#fff;padding:6px 10px;border-radius:6px;font-size:0.75rem;text-decoration:none;font-weight:700;"><i class="fa-brands fa-whatsapp"></i> Chat</a>
+        </div>
+    `).join('');
+}
+
+/* EVENT MODAL HANDLERS */
+function openCreateEventModal() { document.getElementById('event-create-modal').style.display = 'flex'; }
+function closeEventModal() { document.getElementById('event-create-modal').style.display = 'none'; }
+
+async function handleEventSubmit(e) {
+    e.preventDefault();
+    const imgInput = document.getElementById('evt-image-file');
+    let imgUrl = '';
+    if(imgInput && imgInput.files[0]) imgUrl = (await uploadSelectedFile(imgInput)).url;
+
+    const res = await fetch('/api/events', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            title: document.getElementById('evt-title').value,
+            event_date: document.getElementById('evt-date').value,
+            location: document.getElementById('evt-location').value,
+            description: document.getElementById('evt-desc').value,
+            image_url: imgUrl,
+            group_id: activePageId
+        })
+    });
+    const data = await res.json();
+    showToast(data.message);
+    if(data.success) {
+        closeEventModal();
+        loadEventsFeed();
+    }
+}
+
+async function loadEventsFeed() {
+    const res = await fetch('/api/events');
+    const events = await res.json();
+    const c = document.getElementById('events-feed-container');
+    if(!events.length) { c.innerHTML = '<div class="card">No events listed right now.</div>'; return; }
+    c.innerHTML = events.map(e => `
+        <div class="card">
+            ${e.image_url ? `<img src="${e.image_url}" style="width:100%;border-radius:8px;max-height:180px;object-fit:cover;margin-bottom:8px;">` : ''}
+            <h4 style="font-weight:800;font-size:0.98rem;color:var(--navy-blue);">${e.title}</h4>
+            <p style="font-size:0.78rem;color:var(--emerald-green);font-weight:700;">📅 ${e.event_date || 'Upcoming'} • 📍 ${e.location || 'Ijebu'}</p>
+            <p style="font-size:0.82rem;margin-top:4px;">${e.description}</p>
+        </div>
+    `).join('');
+}
+
+/* DATING MODAL HANDLERS */
+function openDatingSettingsModal() {
+    if(!currentUser) return window.location.href = '/auth';
+    document.getElementById('dating-modal').style.display = 'flex';
+}
+function closeDatingModal() { document.getElementById('dating-modal').style.display = 'none'; }
+
+async function handleDatingProfileSubmit(e) {
+    e.preventDefault();
+    const res = await fetch('/api/dating/profile', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            age: document.getElementById('dt-age').value,
+            gender: document.getElementById('dt-gender').value,
+            relationship_intent: document.getElementById('dt-intent').value,
+            occupation: document.getElementById('dt-occupation').value,
+            bio: document.getElementById('dt-bio').value,
+            is_dating_active: document.getElementById('dt-active').checked
+        })
+    });
+    const data = await res.json();
+    showToast(data.message);
+    if(data.success) { closeDatingModal(); loadDatingMatches(); }
+}
+
+async function loadDatingMatches() {
+    const res = await fetch('/api/dating/matches');
+    const matches = await res.json();
+    const container = document.getElementById('dating-matches-container');
+    if(!matches.length) { container.innerHTML = '<div class="card">No active singles on feed yet.</div>'; return; }
+    container.innerHTML = matches.map(m => `
+        <div class="card" style="display:flex;gap:10px;align-items:center;">
+            <div class="avatar" style="width:48px;height:48px;background:var(--fb-blue);" onclick="openProfile('${m.username}')">
+                ${m.avatar_url ? `<img src="${m.avatar_url}" style="width:100%;height:100%;border-radius:50%;">` : m.full_name.charAt(0)}
+            </div>
+            <div style="flex:1;">
+                <h4 class="clickable-name" style="font-size:0.88rem;" onclick="openProfile('${m.username}')">${m.full_name}, ${m.age}</h4>
+                <div style="font-size:0.72rem;color:var(--emerald-green);font-weight:700;">${m.relationship_intent} • ${m.gender}</div>
+                <div style="font-size:0.78rem;color:var(--text-muted);">"${m.bio || 'Living in Ijebu'}"</div>
+            </div>
+            <button onclick="sendWink(${m.id})" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.75rem;">Wink 👋</button>
+        </div>
+    `).join('');
+}
+
+async function sendWink(receiverId) {
+    if(!currentUser) return window.location.href = '/auth';
+    const res = await fetch('/api/dating/wink', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({receiver_id: receiverId})
+    });
+    const data = await res.json();
+    showToast(data.message);
+}
+
+/* FOLLOW & PROFILE HANDLERS */
+async function toggleFollow(username) {
+    if(!currentUser) return window.location.href = '/auth';
+    const res = await fetch(`/api/users/${encodeURIComponent(username)}/follow`, {method:'POST'});
+    const data = await res.json();
+    showToast(data.message);
+    if(data.success) openProfile(username);
+}
+
 async function openProfile(username) {
     const res = await fetch(`/api/users/${encodeURIComponent(username)}`);
     const data = await res.json();
@@ -2033,25 +2586,6 @@ async function openProfile(username) {
     }
 
     const postsHtml = u.posts.length ? u.posts.map(p => renderPostCard(p)).join('') : '<div class="card" style="text-align:center;">No wall updates yet.</div>';
-
-    let productsHtml = '';
-    if(u.products && u.products.length) {
-        productsHtml = `
-            <h4 style="font-size:0.9rem;margin:12px 0 6px;">Directory Listings (${u.products.length})</h4>
-            <div class="card">
-                ${u.products.map(p => `
-                    <div style="border-bottom:1px solid var(--border-light);padding-bottom:8px;margin-bottom:8px;display:flex;gap:10px;align-items:center;">
-                        ${p.image_url ? `<img src="${p.image_url}" style="width:50px;height:50px;border-radius:8px;object-fit:cover;">` : `<div style="width:50px;height:50px;background:#f0f2f5;border-radius:8px;display:flex;align-items:center;justify-content:center;"><i class="fa-solid fa-store"></i></div>`}
-                        <div style="flex:1;">
-                            <h4 style="font-weight:800;font-size:0.85rem;">${p.title}</h4>
-                            <div style="color:var(--emerald-green);font-weight:800;font-size:0.8rem;">₦${p.price.toLocaleString()}</div>
-                        </div>
-                        <a href="https://wa.me/234${p.whatsapp_number.replace(/^0/,'')}" target="_blank" style="background:#25d366;color:#fff;padding:4px 8px;border-radius:6px;font-size:0.7rem;text-decoration:none;font-weight:700;"><i class="fa-brands fa-whatsapp"></i> Chat</a>
-                    </div>
-                `).join('')}
-            </div>
-        `;
-    }
 
     document.getElementById('profile-wall-container').innerHTML = `
         <div class="card">
@@ -2075,7 +2609,6 @@ async function openProfile(username) {
             </div>
         </div>
         ${walletBlock}
-        ${productsHtml}
         <h4 style="font-size:0.9rem;margin:12px 0 6px;">Profile Wall Updates</h4>
         ${postsHtml}
     `;
@@ -2127,15 +2660,135 @@ async function handleProfileUpdateSubmit(e) {
     }
 }
 
-async function toggleFollow(username) {
-    if(!currentUser) return window.location.href = '/auth';
-    const res = await fetch(`/api/users/${encodeURIComponent(username)}/follow`, {method:'POST'});
+function closeCPNModal() { document.getElementById('cpn-upgrade-modal').style.display = 'none'; }
+
+async function handleClaimBankTransfer(e) {
+    e.preventDefault();
+    const note = document.getElementById('cpn-ref-note').value;
+    const res = await fetch('/api/cpn/claim-bank-transfer', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({reference_note: note})
+    });
     const data = await res.json();
     showToast(data.message);
-    if(data.success) openProfile(username);
+    if(data.success) closeCPNModal();
 }
 
-/* POST CARDS & FEED */
+/* PAGES HANDLERS */
+async function loadPages() {
+    const res = await fetch('/api/pages');
+    const pages = await res.json();
+    const c = document.getElementById('pages-container');
+    if(!pages.length) { c.innerHTML = '<div class="card">No pages created yet. Click "+ Create Page" to start one!</div>'; return; }
+    c.innerHTML = pages.map(g => `
+        <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+            <div style="display:flex;align-items:center;gap:12px;cursor:pointer;" onclick="openPageDetail(${g.id})">
+                ${g.avatar_url ? `<img src="${g.avatar_url}" style="width:50px;height:50px;border-radius:12px;object-fit:cover;">` : `<div class="avatar" style="width:50px;height:50px;border-radius:12px;background:var(--fb-blue);"><i class="fa-solid fa-flag"></i></div>`}
+                <div>
+                    <h4 style="font-weight:800;font-size:0.95rem;color:var(--navy-blue);">${g.name}</h4>
+                    <p style="font-size:0.75rem;color:var(--text-muted);">${g.member_count} Followers</p>
+                </div>
+            </div>
+            <button onclick="openPageDetail(${g.id})" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.75rem;">Visit Page</button>
+        </div>
+    `).join('');
+}
+
+async function openPageDetail(pageId) {
+    activePageId = pageId;
+    switchNav('page-detail');
+    const res = await fetch(`/api/pages/${pageId}`);
+    const data = await res.json();
+    if(!data.success) return showToast(data.message, 'error');
+
+    const g = data.page;
+    document.getElementById('active-page-id').value = g.id;
+    const coverBg = g.cover_url ? `style="background-image:url('${g.cover_url}')"` : '';
+    const avatarHtml = g.avatar_url ? `<img src="${g.avatar_url}" style="width:100%;height:100%;object-fit:cover;">` : `<i class="fa-solid fa-flag"></i>`;
+
+    document.getElementById('page-detail-header').innerHTML = `
+        <div class="fb-group-banner" ${coverBg}>
+            <div class="fb-group-avatar">${avatarHtml}</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;align-items:flex-end;margin-top:10px;">
+            <div>
+                <h2 style="font-size:1.2rem;font-weight:800;">${g.name}</h2>
+                <p style="font-size:0.78rem;color:var(--text-muted);">${g.member_count} Followers</p>
+            </div>
+            <div>
+                ${g.is_creator ? `<button onclick="openPageEditModal(${g.id}, '${g.name.replace(/'/g, "\\'")}', '${(g.description||'').replace(/'/g, "\\'")}')" class="btn-submit" style="width:auto;padding:6px 12px;font-size:0.75rem;"><i class="fa-solid fa-pen-to-square"></i> Edit Page</button>` : ''}
+                <button onclick="joinPage(${g.id})" class="btn-submit" style="width:auto;padding:8px 14px;font-size:0.8rem;background:${g.is_member ? '#ef4444' : 'var(--fb-blue)'};">
+                    ${g.is_member ? 'Unfollow Page' : 'Follow Page'}
+                </button>
+            </div>
+        </div>
+        <p style="font-size:0.85rem;margin-top:10px;color:var(--text-muted);">${g.description || ''}</p>
+    `;
+
+    if(g.is_member) {
+        document.getElementById('page-post-composer').style.display = 'block';
+    } else {
+        document.getElementById('page-post-composer').style.display = 'none';
+    }
+    loadPosts('Social', 'page-posts-container', g.id);
+}
+
+function openPageCreateModal() {
+    document.getElementById('edit-page-id').value = "0";
+    document.getElementById('page-modal-title').innerText = "Create Page";
+    document.getElementById('page-name').value = "";
+    document.getElementById('page-desc').value = "";
+    document.getElementById('page-create-modal').style.display = 'flex';
+}
+
+function openPageEditModal(gid, name, desc) {
+    document.getElementById('edit-page-id').value = gid;
+    document.getElementById('page-modal-title').innerText = "Edit Page Details";
+    document.getElementById('page-name').value = name;
+    document.getElementById('page-desc').value = desc;
+    document.getElementById('page-create-modal').style.display = 'flex';
+}
+
+function closePageModal() { document.getElementById('page-create-modal').style.display = 'none'; }
+
+async function handlePageSubmit(e) {
+    e.preventDefault();
+    const name = document.getElementById('page-name').value.trim();
+    const desc = document.getElementById('page-desc').value.trim();
+    const avatarInput = document.getElementById('page-avatar-file');
+    const coverInput = document.getElementById('page-cover-file');
+    let avatarUrl = '', coverUrl = '';
+
+    if(avatarInput && avatarInput.files[0]) avatarUrl = (await uploadSelectedFile(avatarInput)).url;
+    if(coverInput && coverInput.files[0]) coverUrl = (await uploadSelectedFile(coverInput)).url;
+
+    const editId = parseInt(document.getElementById('edit-page-id').value);
+    const endpoint = editId > 0 ? `/api/pages/${editId}/update` : '/api/pages';
+
+    const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({name, description: desc, avatar_url: avatarUrl, cover_url: coverUrl})
+    });
+    const data = await res.json();
+    showToast(data.message);
+    if(data.success) {
+        closePageModal();
+        if(editId > 0) openPageDetail(editId);
+        else loadPages();
+    }
+}
+
+async function joinPage(pageId) {
+    if(!currentUser) return window.location.href = '/auth';
+    const res = await fetch(`/api/pages/${pageId}/join`, {method:'POST'});
+    const data = await res.json();
+    showToast(data.message);
+    openPageDetail(pageId);
+}
+
+/* POST ENGINE & COMMENTS */
 async function loadPosts(postType, containerId, groupId = 0, singlePostId = 0) {
     let url = `/api/posts?type=${postType}&group_id=${groupId}`;
     if(singlePostId > 0) url = `/api/posts?post_id=${singlePostId}`;
@@ -2208,6 +2861,34 @@ async function handlePostSubmit(e, postType) {
     }
 }
 
+async function handlePagePostSubmit(e) {
+    e.preventDefault();
+    if(!currentUser) return window.location.href = '/auth';
+    const pageId = parseInt(document.getElementById('active-page-id').value);
+    const content = document.getElementById('page-post-content').value.trim();
+    if(!content) return showToast('Please enter post text', 'error');
+
+    let imageUrl = '', videoUrl = '';
+    const fileInput = document.getElementById('page-post-file-input');
+    if(fileInput && fileInput.files[0]) {
+        const upload = await uploadSelectedFile(fileInput);
+        if(upload.is_video) videoUrl = upload.url;
+        else imageUrl = upload.url;
+    }
+
+    const res = await fetch('/api/posts', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({content, image_url: imageUrl, video_url: videoUrl, post_type: 'Social', group_id: pageId})
+    });
+    const data = await res.json();
+    showToast(data.message);
+    if(data.success) {
+        document.getElementById('page-post-content').value = '';
+        loadPosts('Social', 'page-posts-container', pageId);
+    }
+}
+
 async function uploadSelectedFile(fileInput) {
     if(!fileInput || !fileInput.files[0]) return {url:'', is_video: false};
     const formData = new FormData();
@@ -2220,6 +2901,7 @@ async function uploadSelectedFile(fileInput) {
 async function toggleLike(pid) {
     if(!currentUser) return window.location.href = '/auth';
     await fetch(`/api/posts/${pid}/like`, {method:'POST'});
+    if(activePageId > 0) loadPosts('Social', 'page-posts-container', activePageId);
     loadPosts('Social', 'feed-posts-container');
 }
 
@@ -2233,17 +2915,34 @@ async function toggleComments(pid) {
     box.innerHTML = `
         <div id="comment-list-${pid}">
             ${comments.map(c => `
-                <div class="comment-item">
-                    <span class="clickable-name" onclick="openProfile('${c.username}')">@${c.username}</span>: ${c.content}
-                    <div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px;">${formatTimestamp(c.created_at)}</div>
+                <div class="comment-item ${c.parent_id > 0 ? 'comment-reply-item' : ''}">
+                    <span class="clickable-name" onclick="openProfile('${c.username}')">@${c.username}</span> ${c.parent_username ? `<small style="color:var(--fb-blue);">replying to @${c.parent_username}</small>` : ''}: ${c.content}
+                    <div style="display:flex;gap:12px;align-items:center;margin-top:4px;font-size:0.75rem;color:var(--text-muted);">
+                        <span>🕒 ${formatTimestamp(c.created_at)}</span>
+                        <span onclick="toggleCommentLike(${c.id}, ${pid})" style="cursor:pointer;font-weight:700;">❤️ ${c.likes_count || 0}</span>
+                        <span onclick="setupReply(${pid}, ${c.id}, '${c.username}')" style="cursor:pointer;font-weight:700;color:var(--fb-blue);">↩️ Reply</span>
+                    </div>
                 </div>
-            `).join('') || '<small>No comments yet.</small>'}
+            `).join('') || '<small>No comments yet. Be the first to comment!</small>'}
         </div>
         <div style="display:flex;gap:4px;margin-top:8px;">
             <input type="text" id="comment-input-${pid}" class="form-control" placeholder="Write a comment..." style="padding:6px;font-size:0.8rem;">
             <button onclick="submitComment(${pid})" style="background:var(--emerald-green);color:#fff;border:none;padding:6px 12px;border-radius:8px;font-weight:700;font-size:0.75rem;">Post</button>
         </div>
     `;
+}
+
+function setupReply(pid, commentId, username) {
+    replyParentCommentId = commentId;
+    const input = document.getElementById(`comment-input-${pid}`);
+    input.value = `@${username} `;
+    input.focus();
+}
+
+async function toggleCommentLike(cid, pid) {
+    if(!currentUser) return window.location.href = '/auth';
+    await fetch(`/api/comments/${cid}/like`, {method:'POST'});
+    toggleComments(pid);
 }
 
 async function submitComment(pid) {
@@ -2255,13 +2954,14 @@ async function submitComment(pid) {
     await fetch(`/api/posts/${pid}/comments`, {
         method:'POST',
         headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({content, parent_id: 0})
+        body: JSON.stringify({content, parent_id: replyParentCommentId})
     });
+    replyParentCommentId = 0;
     input.value = '';
     toggleComments(pid);
 }
 
-/* SHARING PREVIEW JS HELPERS */
+/* SHARING PREVIEW JS FUNCTIONS */
 function sharePost(postId) {
     const shareUrl = `${window.location.origin}/?post=${postId}`;
     if (navigator.share) {
@@ -2283,7 +2983,7 @@ function shareMemberProfile(username) {
 function sharePlatform() {
     const shareUrl = `${window.location.origin}/`;
     if (navigator.share) {
-        navigator.share({ title: 'Ijebu Connect', text: 'Join Ijebu Connect to network, post, and explore opportunities!', url: shareUrl }).catch(() => {});
+        navigator.share({ title: 'Ijebu Connect - Community Platform', text: 'Join Ijebu Connect to network, post, and explore opportunities!', url: shareUrl }).catch(() => {});
     } else {
         navigator.clipboard.writeText(shareUrl).then(() => showToast('Platform link copied to clipboard!'));
     }
@@ -2312,7 +3012,17 @@ AUTH_TEMPLATE = r"""
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Auth - Ijebu Connect</title>
+    <title>{{ meta_title }}</title>
+    <meta name="description" content="{{ meta_desc }}">
+
+    <!-- Open Graph Metadata Preview -->
+    <meta property="og:site_name" content="Ijebu Connect">
+    <meta property="og:title" content="{{ meta_title }}">
+    <meta property="og:description" content="{{ meta_desc }}">
+    <meta property="og:image" content="{{ meta_image }}">
+    <meta property="og:url" content="{{ meta_url }}">
+    <meta property="og:type" content="website">
+
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root { --fb-blue: #1877f2; --navy-blue: #0b1e36; --border-light: #cbd5e1; }
@@ -2340,22 +3050,26 @@ AUTH_TEMPLATE = r"""
         <button class="auth-tab-btn" id="tab-register" onclick="switchAuthTab('register')">Register New Member</button>
     </div>
 
+    <!-- LOGIN FORM -->
     <form id="form-login" onsubmit="handleLogin(event)">
         <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Username or Phone</label><input type="text" id="login-uname" class="form-control" required></div>
         <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Password</label><input type="password" id="login-pword" class="form-control" required></div>
         <button type="submit" class="btn-submit">Sign In</button>
     </form>
 
+    <!-- REGISTER FORM -->
     <form id="form-register" onsubmit="handleRegister(event)" style="display:none;">
         <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Full Name</label><input type="text" id="reg-fullname" class="form-control" placeholder="e.g. Adewale Adebayo" required></div>
         <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Phone Number</label><input type="tel" id="reg-phone" class="form-control" placeholder="e.g. 09018363715" required></div>
         <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Username</label><input type="text" id="reg-username" class="form-control" placeholder="e.g. adewale2026" required></div>
         <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Password</label><input type="password" id="reg-password" class="form-control" required></div>
+        <div class="form-group"><label style="font-size:0.8rem;font-weight:700;">Referral Code (Optional)</label><input type="text" id="reg-ref" class="form-control" placeholder="e.g. CPN00001"></div>
         <button type="submit" class="btn-submit" style="background:var(--navy-blue);">Create Account</button>
     </form>
 </div>
 <footer class="app-footer">
-    <p><strong>Willys Media World</strong> &copy; 2026</p>
+    <p><strong>{{ company_name }}</strong> &copy; 2026</p>
+    <p>Phone: 09018363715 | {{ contact_email }}</p>
 </footer>
 <script>
 function switchAuthTab(type) {
@@ -2396,7 +3110,8 @@ async function handleRegister(e) {
             full_name: document.getElementById('reg-fullname').value,
             phone: document.getElementById('reg-phone').value,
             username: document.getElementById('reg-username').value,
-            password: document.getElementById('reg-password').value
+            password: document.getElementById('reg-password').value,
+            referred_by: document.getElementById('reg-ref').value
         })
     });
     const data = await res.json();
@@ -2411,15 +3126,303 @@ async function handleRegister(e) {
 </html>
 """
 
+ADMIN_TEMPLATE = r"""
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Control Panel - Ijebu Connect</title>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family:'Plus Jakarta Sans', sans-serif; background:#f8fafc; color:#0f172a; padding:1rem; max-width:1000px; margin:0 auto; }
+        .admin-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:1rem; }
+        .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:0.75rem; margin-bottom:1rem; }
+        .card { background:#fff; border:1.5px solid #cbd5e1; border-radius:12px; padding:1rem; margin-bottom: 10px; }
+        .val { font-size:1.3rem; font-weight:800; color:#059669; }
+        .lbl { font-size:0.72rem; color:#64748b; font-weight:700; text-transform:uppercase; }
+        .admin-tabs { display:flex; gap:6px; margin-bottom:1rem; border-bottom:2px solid #cbd5e1; padding-bottom:6px; overflow-x:auto; }
+        .admin-tab { padding:6px 12px; border-radius:6px; border:none; background:#fff; font-weight:700; font-size:0.8rem; cursor:pointer; color:#64748b; flex-shrink:0; }
+        .admin-tab.active { background:#0b1e36; color:#fff; }
+        .tab-sec { display:none; } .tab-sec.active { display:block; }
+        .btn-act { padding:6px 12px; border-radius:6px; border:none; color:#fff; font-weight:700; cursor:pointer; font-size:0.75rem; }
+        .btn-app { background:#059669; } .btn-rej { background:#ef4444; } .btn-del { background:#dc2626; } .btn-edit { background:#2563eb; }
+        .form-control { padding: 10px 12px; border-radius: 8px; border: 1.5px solid #cbd5e1; font-size: 0.85rem; outline: none; width: 100%; margin-bottom: 8px; }
+        .search-box-wrap { margin-bottom: 1rem; }
+        .app-footer { margin-top: 2rem; padding: 1rem 0; border-top: 1px solid #cbd5e1; text-align: center; font-size: 0.78rem; color: #64748b; }
+        .item-card { background: #fff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 12px; margin-bottom: 8px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; }
+    </style>
+</head>
+<body>
+<div class="admin-header">
+    <h2>⚙️ Admin Control Panel</h2>
+    <a href="/" style="color:#0b1e36;font-weight:700;text-decoration:none;font-size:0.85rem;">← Back to App</a>
+</div>
+
+<div class="grid">
+    <div class="card"><div class="val" id="st-users">0</div><div class="lbl">Total Members</div></div>
+    <div class="card"><div class="val" id="st-income" style="color:#2563eb;">₦0.00</div><div class="lbl">Total Gross Revenue</div></div>
+    <div class="card"><div class="val" id="st-net" style="color:#059669;">₦0.00</div><div class="lbl">Admin Net Profit</div></div>
+    <div class="card"><div class="val" id="st-partners">0</div><div class="lbl">CPN Partners</div></div>
+    <div class="card"><div class="val" id="st-wallets">₦0.00</div><div class="lbl">Member Wallet Balances</div></div>
+</div>
+
+<div class="admin-tabs">
+    <button class="admin-tab active" onclick="switchAdminTab('posts')">Manage Posts</button>
+    <button class="admin-tab" onclick="switchAdminTab('members')">Manage Members</button>
+    <button class="admin-tab" onclick="switchAdminTab('partners')">CPN Claims</button>
+    <button class="admin-tab" onclick="switchAdminTab('payouts')">Bank Cashouts</button>
+</div>
+
+<!-- MANAGE POSTS TAB WITH LIVE SEARCH -->
+<div id="adm-posts" class="tab-sec active">
+    <div class="search-box-wrap">
+        <input type="text" class="form-control" placeholder="🔍 Search post content, author name or username..." onkeyup="searchAdminPosts(this.value)">
+    </div>
+    <div id="posts-container"></div>
+</div>
+
+<!-- MANAGE MEMBERS TAB WITH LIVE SEARCH -->
+<div id="adm-members" class="tab-sec">
+    <div class="search-box-wrap">
+        <input type="text" class="form-control" placeholder="🔍 Search member full name, phone or username..." onkeyup="searchAdminMembers(this.value)">
+    </div>
+    <div id="members-container"></div>
+</div>
+
+<!-- CPN CLAIMS TAB WITH LIVE SEARCH -->
+<div id="adm-partners" class="tab-sec">
+    <div class="search-box-wrap">
+        <input type="text" class="form-control" placeholder="🔍 Search partner upgrade request by member name or reference..." onkeyup="searchAdminPartners(this.value)">
+    </div>
+    <div id="partners-container"></div>
+</div>
+
+<!-- BANK CASHOUTS TAB WITH LIVE SEARCH -->
+<div id="adm-payouts" class="tab-sec">
+    <div class="search-box-wrap">
+        <input type="text" class="form-control" placeholder="🔍 Search payout request by member name, bank or account..." onkeyup="searchAdminPayouts(this.value)">
+    </div>
+    <div id="payouts-container"></div>
+</div>
+
+<!-- ADMIN EDIT MEMBER MODAL -->
+<div id="admin-edit-modal" style="display:none;position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;padding:1rem;">
+    <div class="card" style="max-width:400px;width:100%;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+            <h3 style="font-size:1rem;font-weight:800;">Edit Member Profile</h3>
+            <button onclick="closeAdminEditModal()" style="background:none;border:none;font-size:1.4rem;">&times;</button>
+        </div>
+        <form onsubmit="handleAdminUserUpdate(event)">
+            <input type="hidden" id="adm-edit-id">
+            <div><label style="font-size:0.75rem;font-weight:700;">Full Name</label><input type="text" id="adm-edit-name" class="form-control" required></div>
+            <div><label style="font-size:0.75rem;font-weight:700;">Phone</label><input type="text" id="adm-edit-phone" class="form-control" required></div>
+            <div><label style="font-size:0.75rem;font-weight:700;">User Type</label>
+                <select id="adm-edit-type" class="form-control">
+                    <option value="Resident">Resident</option>
+                    <option value="CPN Partner">CPN Partner</option>
+                    <option value="Admin">Admin</option>
+                </select>
+            </div>
+            <div><label style="font-size:0.75rem;font-weight:700;">Wallet Balance (₦)</label><input type="number" step="0.01" id="adm-edit-wallet" class="form-control" required></div>
+            <div><label style="font-size:0.75rem;font-weight:700;">Occupation</label><input type="text" id="adm-edit-occupation" class="form-control"></div>
+            <button type="submit" class="btn-act btn-app" style="width:100%;padding:10px;font-size:0.85rem;margin-top:6px;">Save Changes</button>
+        </form>
+    </div>
+</div>
+
+<footer class="app-footer">
+    <p><strong>{{ company_name }}</strong> &copy; 2026 Admin Dashboard</p>
+    <p>Phone: 09018363715 | {{ contact_email }}</p>
+</footer>
+
+<script>
+function switchAdminTab(t) {
+    document.querySelectorAll('.admin-tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-sec').forEach(s => s.classList.remove('active'));
+    event.target.classList.add('active');
+    document.getElementById(`adm-${t}`).classList.add('active');
+}
+
+async function loadAdminOverview() {
+    const res = await fetch('/api/admin/overview');
+    const data = await res.json();
+    if(!data.success) { alert('Admin access denied.'); window.location.href='/'; return; }
+    document.getElementById('st-users').innerText = data.total_users;
+    document.getElementById('st-income').innerText = '₦' + data.total_gross_income.toLocaleString();
+    document.getElementById('st-net').innerText = '₦' + data.admin_net_balance.toLocaleString();
+    document.getElementById('st-partners').innerText = data.total_partners;
+    document.getElementById('st-wallets').innerText = '₦' + data.total_partner_wallets.toLocaleString();
+
+    searchAdminPosts('');
+    searchAdminMembers('');
+    searchAdminPartners('');
+    searchAdminPayouts('');
+}
+
+/* SEARCHABLE MANAGE POSTS */
+async function searchAdminPosts(q) {
+    const res = await fetch(`/api/admin/posts?q=${encodeURIComponent(q)}`);
+    const posts = await res.json();
+    const box = document.getElementById('posts-container');
+    if(!posts.length) { box.innerHTML = '<div class="card" style="text-align:center;">No posts found.</div>'; return; }
+    box.innerHTML = posts.map(p => `
+        <div class="item-card">
+            <div>
+                <div style="font-weight:800;">${p.full_name} <small style="color:#64748b;">(@${p.username})</small></div>
+                <div style="font-size:0.82rem;margin:4px 0;">${p.content}</div>
+                <small style="color:#64748b;">${p.group_name ? `Page: ${p.group_name}` : p.post_type}</small>
+            </div>
+            <button class="btn-act btn-del" onclick="deleteAdminPost(${p.id})">Delete Post</button>
+        </div>
+    `).join('');
+}
+
+async function deleteAdminPost(pid) {
+    if(!confirm('Are you sure you want to delete this post?')) return;
+    const res = await fetch(`/api/admin/posts?post_id=${pid}`, {method:'DELETE'});
+    const data = await res.json();
+    alert(data.message);
+    loadAdminOverview();
+}
+
+/* SEARCHABLE MANAGE MEMBERS */
+async function searchAdminMembers(q) {
+    const res = await fetch(`/api/admin/users?q=${encodeURIComponent(q)}`);
+    const users = await res.json();
+    const box = document.getElementById('members-container');
+    if(!users.length) { box.innerHTML = '<div class="card" style="text-align:center;">No matching members found.</div>'; return; }
+    box.innerHTML = users.map(u => `
+        <div class="item-card">
+            <div>
+                <div style="font-weight:800;font-size:0.92rem;">${u.full_name} <small style="color:#64748b;">(@${u.username})</small></div>
+                <div style="font-size:0.78rem;color:#64748b;">Phone: ${u.phone} | Type: <b>${u.user_type}</b> | Wallet: <b style="color:#059669;">₦${(u.wallet_balance || 0).toLocaleString()}</b></div>
+            </div>
+            <div style="display:flex;gap:6px;">
+                <button class="btn-act btn-edit" onclick="openAdminEditModal(${u.id}, '${u.full_name.replace(/'/g, "\\'")}', '${u.phone}', '${u.user_type}', ${u.wallet_balance || 0}, '${(u.occupation||'').replace(/'/g, "\\'")}')">Edit Profile</button>
+                ${u.user_type !== 'Admin' ? `<button class="btn-act btn-del" onclick="deleteMember(${u.id})">Delete</button>` : ''}
+            </div>
+        </div>
+    `).join('');
+}
+
+function openAdminEditModal(id, name, phone, type, wallet, occupation) {
+    document.getElementById('adm-edit-id').value = id;
+    document.getElementById('adm-edit-name').value = name;
+    document.getElementById('adm-edit-phone').value = phone;
+    document.getElementById('adm-edit-type').value = type;
+    document.getElementById('adm-edit-wallet').value = wallet;
+    document.getElementById('adm-edit-occupation').value = occupation;
+    document.getElementById('admin-edit-modal').style.display = 'flex';
+}
+
+function closeAdminEditModal() { document.getElementById('admin-edit-modal').style.display = 'none'; }
+
+async function handleAdminUserUpdate(e) {
+    e.preventDefault();
+    const res = await fetch('/api/admin/users/update', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+            user_id: document.getElementById('adm-edit-id').value,
+            full_name: document.getElementById('adm-edit-name').value,
+            phone: document.getElementById('adm-edit-phone').value,
+            user_type: document.getElementById('adm-edit-type').value,
+            wallet_balance: document.getElementById('adm-edit-wallet').value,
+            occupation: document.getElementById('adm-edit-occupation').value
+        })
+    });
+    const data = await res.json();
+    alert(data.message);
+    if(data.success) {
+        closeAdminEditModal();
+        loadAdminOverview();
+    }
+}
+
+async function deleteMember(uid) {
+    if(!confirm('Remove this member completely?')) return;
+    await fetch(`/api/admin/users?user_id=${uid}`, {method:'DELETE'});
+    loadAdminOverview();
+}
+
+/* SEARCHABLE CPN CLAIMS */
+async function searchAdminPartners(q) {
+    const res = await fetch(`/api/admin/partner-requests?q=${encodeURIComponent(q)}`);
+    const reqs = await res.json();
+    const box = document.getElementById('partners-container');
+    if(!reqs.length) { box.innerHTML = '<div class="card" style="text-align:center;">No CPN requests found.</div>'; return; }
+    box.innerHTML = reqs.map(r => `
+        <div class="item-card">
+            <div>
+                <div style="font-weight:800;">${r.full_name} <small style="color:#64748b;">(@${r.username})</small></div>
+                <div style="font-size:0.78rem;">Amount: <b style="color:#059669;">₦${r.amount.toLocaleString()}</b> | Ref: ${r.reference_note}</div>
+            </div>
+            <div>
+                ${r.status === 'pending' ? `
+                    <button class="btn-act btn-app" onclick="actPartnerReq(${r.id}, 'approve')">Approve</button>
+                    <button class="btn-act btn-rej" onclick="actPartnerReq(${r.id}, 'reject')">Reject</button>
+                ` : `<b>${r.status.toUpperCase()}</b>`}
+            </div>
+        </div>
+    `).join('');
+}
+
+async function actPartnerReq(id, action) {
+    await fetch('/api/admin/partner-requests', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({request_id: id, action: action})
+    });
+    loadAdminOverview();
+}
+
+/* SEARCHABLE CASHOUTS */
+async function searchAdminPayouts(q) {
+    const res = await fetch(`/api/admin/payouts?q=${encodeURIComponent(q)}`);
+    const payouts = await res.json();
+    const box = document.getElementById('payouts-container');
+    if(!payouts.length) { box.innerHTML = '<div class="card" style="text-align:center;">No cashout requests found.</div>'; return; }
+    box.innerHTML = payouts.map(p => `
+        <div class="item-card">
+            <div>
+                <div style="font-weight:800;">${p.full_name}</div>
+                <div style="font-size:0.78rem;">Amount: <b style="color:#059669;">₦${p.amount.toLocaleString()}</b> | Bank: <b>${p.bank_name} (${p.account_number})</b></div>
+            </div>
+            <div>
+                ${p.status === 'pending' ? `
+                    <button class="btn-act btn-app" onclick="updatePayout(${p.id}, 'approved')">Approve</button>
+                    <button class="btn-act btn-rej" onclick="updatePayout(${p.id}, 'rejected')">Reject</button>
+                ` : `<b>${p.status.toUpperCase()}</b>`}
+            </div>
+        </div>
+    `).join('');
+}
+
+async function updatePayout(id, status) {
+    await fetch('/api/admin/payouts', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({payout_id: id, status: status})
+    });
+    loadAdminOverview();
+}
+
+loadAdminOverview();
+</script>
+</body>
+</html>
+"""
+
 # ======================================================================
-# ROUTE HANDLERS & DYNAMIC OPENGRAPH SOCIAL SHARE PREVIEW ENGINE
+# ROUTE HANDLERS
 # ======================================================================
 @app.route('/')
 def index():
     post_id = request.args.get('post')
     user_param = request.args.get('user')
 
-    # IF NO PREVIEW PARAMS AND NOT LOGGED IN, REDIRECT USER TO /auth
+    # UNAUTHENTICATED DIRECT USERS GET REDIRECTED, BUT CRAWLERS OR DIRECT LINK PARAMS RENDER TEMPLATE WITH META TAGS
     if 'user_id' not in session and not post_id and not user_param:
         return redirect(url_for('auth_page'))
 
@@ -2428,9 +3431,8 @@ def index():
         host_url = host_url.replace('http://', 'https://')
 
     logo1, logo2 = get_system_logos()
-    system_logo_url = f"{host_url.rstrip('/')}{logo2}"
+    system_logo_url = f"{host_url.rstrip('/')}{logo2}" if logo2.startswith('/') else logo2
 
-    # DEFAULT PLATFORM PREVIEW METADATA
     meta_title = "Ijebu Connect - Community Platform"
     meta_desc = "Connect with pages, friends, and trade on Ijebu Connect."
     meta_image = system_logo_url
@@ -2441,7 +3443,7 @@ def index():
     cursor = db.cursor()
     p = query_param()
 
-    # DYNAMIC POST PREVIEW GENERATOR
+    # DYNAMIC POST SHARE PREVIEW
     if post_id:
         try:
             cursor.execute(f'''
@@ -2452,14 +3454,15 @@ def index():
             post_row = cursor.fetchone()
             if post_row:
                 meta_title = f"Post by {post_row['full_name']} | Ijebu Connect"
-                content_clean = post_row['content'].strip() if post_row['content'] else ""
-                if len(content_clean) > 140:
-                    meta_desc = content_clean[:137] + "..."
+                content_text = (post_row['content'] or '').strip()
+                if content_text:
+                    meta_desc = (content_text[:120] + "...") if len(content_text) > 120 else content_text
                 else:
-                    meta_desc = content_clean if content_clean else "Check out this post on Ijebu Connect!"
+                    meta_desc = "Check out this post on Ijebu Connect!"
 
                 if post_row['image_url']:
-                    meta_image = f"{host_url.rstrip('/')}{post_row['image_url']}" if post_row['image_url'].startswith('/') else post_row['image_url']
+                    img_path = post_row['image_url']
+                    meta_image = f"{host_url.rstrip('/')}{img_path}" if img_path.startswith('/') else img_path
                 else:
                     meta_image = system_logo_url
 
@@ -2467,7 +3470,7 @@ def index():
         except Exception as e:
             logger.error(f"Error parsing deep link post metadata: {e}")
 
-    # DYNAMIC MEMBER PROFILE PREVIEW GENERATOR
+    # DYNAMIC MEMBER PROFILE SHARE PREVIEW
     elif user_param:
         try:
             cursor.execute(f'''
@@ -2477,9 +3480,10 @@ def index():
             if user_row:
                 meta_title = f"{user_row['full_name']} (@{user_param}) | Ijebu Connect"
                 meta_desc = user_row['bio'] if user_row['bio'] else f"Connect with {user_row['full_name']} on Ijebu Connect."
-                
+
                 if user_row['avatar_url']:
-                    meta_image = f"{host_url.rstrip('/')}{user_row['avatar_url']}" if user_row['avatar_url'].startswith('/') else user_row['avatar_url']
+                    avatar_path = user_row['avatar_url']
+                    meta_image = f"{host_url.rstrip('/')}{avatar_path}" if avatar_path.startswith('/') else avatar_path
                 else:
                     meta_image = system_logo_url
 
@@ -2501,13 +3505,32 @@ def index():
 
 @app.route('/auth')
 def auth_page():
+    host_url = request.host_url
+    if not host_url.startswith('https://') and 'localhost' not in host_url and '127.0.0.1' not in host_url:
+        host_url = host_url.replace('http://', 'https://')
+
     logo1, logo2 = get_system_logos()
+    logo_abs_url = f"{host_url.rstrip('/')}{logo1}" if logo1.startswith('/') else logo1
+
+    meta_title = "Ijebu Connect - Sign In / Register"
+    meta_desc = "Join Ijebu Connect to network, post updates, list products, and connect across Ijebu."
+    meta_image = logo_abs_url
+    meta_url = request.url
+
     return render_template_string(
         AUTH_TEMPLATE,
         contact_email=CONTACT_EMAIL,
         company_name=COMPANY_NAME,
-        auth_logo=logo1
+        auth_logo=logo1,
+        meta_title=meta_title,
+        meta_desc=meta_desc,
+        meta_image=meta_image,
+        meta_url=meta_url
     )
+
+@app.route('/admin')
+def admin_page():
+    return render_template_string(ADMIN_TEMPLATE, contact_email=CONTACT_EMAIL, company_name=COMPANY_NAME)
 
 @app.errorhandler(500)
 def internal_server_error(e):
@@ -2518,3 +3541,4 @@ if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"Starting Ijebu Connect application on port {port}...")
     app.run(host='0.0.0.0', port=port, debug=True)
+    
