@@ -95,7 +95,7 @@ def get_db():
         if DATABASE_URL:
             import psycopg2
             import psycopg2.extras
-            url = DATABASE_URL.replace("postgres://", "postgresql://")
+            url = DATABASE_URL.replace("postgres://", "postgresql://").replace("channel_binding=require", "channel_binding=disable")
             g.db = psycopg2.connect(url, cursor_factory=psycopg2.extras.DictCursor)
         else:
             db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'ijebu_connect.db')
