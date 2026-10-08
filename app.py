@@ -148,7 +148,7 @@ def count_user_listings(user_id):
     ad_post_count = cursor.fetchone()[0]
     return prod_count + ad_post_count
 
-# SEEDING ROUTINE
+# HARDCODED SEEDING
 def seed_hardcoded_data(cursor, db):
     logger.info("Executing persistent seeding...")
     p = query_param()
@@ -882,6 +882,47 @@ def get_page_detail(page_id):
     res['is_creator'] = (uid == page['user_id'])
     return jsonify({'success': True, 'page': res})
 
+@app.route('/api/pages/<int:page_id>/update', methods=['POST'])
+def update_page(page_id):
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'message': 'Login required.'}), 401
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+    uid = session['user_id']
+
+    cursor.execute(f"SELECT user_id FROM groups WHERE id = {p}", (page_id,))
+    g_row = cursor.fetchone()
+    if not g_row or g_row['user_id'] != uid:
+        return jsonify({'success': False, 'message': 'Only the page creator can update page details.'}), 403
+
+    data = request.json or {}
+    name = data.get('name', '').strip()
+    description = data.get('description', '').strip()
+    avatar_url = data.get('avatar_url', '').strip()
+    cover_url = data.get('cover_url', '').strip()
+
+    updates, params = [], []
+    if name:
+        updates.append(f"name = {p}")
+        params.append(name)
+    if description is not None:
+        updates.append(f"description = {p}")
+        params.append(description)
+    if avatar_url:
+        updates.append(f"avatar_url = {p}")
+        params.append(avatar_url)
+    if cover_url:
+        updates.append(f"cover_url = {p}")
+        params.append(cover_url)
+
+    if updates:
+        params.append(page_id)
+        cursor.execute(f"UPDATE groups SET {', '.join(updates)} WHERE id = {p}", tuple(params))
+        db.commit()
+
+    return jsonify({'success': True, 'message': 'Page updated successfully!'})
+
 @app.route('/api/pages/<int:page_id>/join', methods=['POST'])
 def join_page(page_id):
     if 'user_id' not in session:
@@ -1391,7 +1432,7 @@ def chat_thread(username):
     return jsonify({'success': True, 'other': dict(other), 'messages': messages, 'me_id': uid})
 
 # ======================================================================
-# SEARCHABLE ADMIN API
+# SEARCHABLE ADMIN API (WITH MANAGE PAGES)
 # ======================================================================
 @app.route('/api/admin/overview', methods=['GET'])
 def get_admin_overview():
@@ -1433,6 +1474,40 @@ def get_admin_overview():
         'total_approved_payouts': total_approved_payouts,
         'admin_net_balance': admin_net_balance
     })
+
+@app.route('/api/admin/pages', methods=['GET', 'DELETE'])
+def admin_manage_pages():
+    admin, err = require_admin()
+    if err: return err
+    db = get_db()
+    cursor = db.cursor()
+    p = query_param()
+
+    if request.method == 'DELETE':
+        page_id = request.args.get('page_id')
+        if not page_id:
+            return jsonify({'success': False, 'message': 'Page ID required.'}), 400
+        cursor.execute(f"DELETE FROM group_members WHERE group_id = {p}", (page_id,))
+        cursor.execute(f"DELETE FROM posts WHERE group_id = {p}", (page_id,))
+        cursor.execute(f"DELETE FROM events WHERE group_id = {p}", (page_id,))
+        cursor.execute(f"DELETE FROM groups WHERE id = {p}", (page_id,))
+        db.commit()
+        return jsonify({'success': True, 'message': 'Page deleted successfully.'})
+
+    q = request.args.get('q', '').strip().lower()
+    sql = '''
+        SELECT g.*, u.full_name AS creator_name, u.username AS creator_username,
+        (SELECT COUNT(*) FROM group_members gm WHERE gm.group_id = g.id) AS member_count
+        FROM groups g JOIN users u ON g.user_id = u.id
+    '''
+    if q:
+        sql += f" WHERE LOWER(g.name) LIKE {p} OR LOWER(g.description) LIKE {p} OR LOWER(u.full_name) LIKE {p}"
+        sql += " ORDER BY g.id DESC LIMIT 50"
+        cursor.execute(sql, (f"%{q}%", f"%{q}%", f"%{q}%"))
+    else:
+        sql += " ORDER BY g.id DESC LIMIT 50"
+        cursor.execute(sql)
+    return jsonify([dict(r) for r in cursor.fetchall()])
 
 @app.route('/api/admin/posts', methods=['GET', 'DELETE'])
 def admin_manage_posts():
@@ -1715,6 +1790,7 @@ INDEX_TEMPLATE = r"""
         .comment-reply-item { margin-left: 18px; padding-left: 8px; border-left: 2px solid var(--fb-blue); }
 
         .btn-submit { background: var(--fb-blue); color: #fff; border: none; padding: 10px 16px; border-radius: 8px; font-weight: 700; font-size: 0.88rem; cursor: pointer; width: 100%; min-height: 42px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+        .btn-submit:disabled { opacity: 0.65; cursor: not-allowed; }
         .btn-secondary { background: var(--navy-blue); color: #fff; }
         .form-control { padding: 10px 12px; border-radius: 8px; border: 1.5px solid var(--border-light); font-size: 0.88rem; outline: none; width: 100%; background: #fff; }
 
@@ -1798,7 +1874,7 @@ INDEX_TEMPLATE = r"""
                 <div style="display:flex;gap:8px;align-items:center;margin:8px 0;">
                     <input type="file" id="post-file-input" class="form-control" accept="image/*,video/*" style="padding:4px;">
                 </div>
-                <button type="submit" class="btn-submit">Publish Update</button>
+                <button type="submit" class="btn-submit" id="feed-post-btn">Publish Update</button>
             </form>
         </div>
         <div id="feed-posts-container"></div>
@@ -1825,7 +1901,7 @@ INDEX_TEMPLATE = r"""
                 <div style="display:flex;gap:8px;align-items:center;margin:8px 0;">
                     <input type="file" id="page-post-file-input" class="form-control" accept="image/*,video/*" style="padding:4px;">
                 </div>
-                <button type="submit" class="btn-submit">Publish Page Post</button>
+                <button type="submit" class="btn-submit" id="page-post-btn">Publish Page Post</button>
             </form>
         </div>
         <div id="page-posts-container"></div>
@@ -1906,7 +1982,7 @@ INDEX_TEMPLATE = r"""
 </div>
 
 <!-- ====================================================================== -->
-<!-- ALL MODALS FULLY RESTORED -->
+<!-- ALL MODALS FULLY FUNCTIONAL -->
 <!-- ====================================================================== -->
 
 <!-- 1. MULTI-PURPOSE SELL / LISTING MODAL -->
@@ -1924,7 +2000,7 @@ INDEX_TEMPLATE = r"""
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">WhatsApp Contact</label><input type="text" class="form-control" id="prod-whatsapp" placeholder="e.g. 09018363715" required></div>
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Upload Photo/Video</label><input type="file" id="prod-img-file" class="form-control" accept="image/*,video/*"></div>
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea class="form-control" id="prod-desc" rows="2"></textarea></div>
-            <button type="submit" class="btn-submit">Publish Item</button>
+            <button type="submit" class="btn-submit" id="sell-submit-btn">Publish Item</button>
         </form>
     </div>
 </div>
@@ -1942,7 +2018,7 @@ INDEX_TEMPLATE = r"""
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Location</label><input type="text" id="evt-location" class="form-control" placeholder="e.g. Ijebu Imusin"></div>
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Event Banner</label><input type="file" id="evt-image-file" class="form-control" accept="image/*"></div>
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea id="evt-desc" class="form-control" rows="2"></textarea></div>
-            <button type="submit" class="btn-submit">Publish Event</button>
+            <button type="submit" class="btn-submit" id="evt-submit-btn">Publish Event</button>
         </form>
     </div>
 </div>
@@ -1961,7 +2037,7 @@ INDEX_TEMPLATE = r"""
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Occupation</label><input type="text" id="dt-occupation" class="form-control"></div>
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Bio</label><textarea id="dt-bio" class="form-control" rows="2"></textarea></div>
             <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;"><input type="checkbox" id="dt-active" checked><label for="dt-active" style="font-size:0.8rem;">Show on Dating Feed</label></div>
-            <button type="submit" class="btn-submit">Save Dating Profile</button>
+            <button type="submit" class="btn-submit" id="dt-submit-btn">Save Dating Profile</button>
         </form>
     </div>
 </div>
@@ -1986,7 +2062,7 @@ INDEX_TEMPLATE = r"""
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Bio / About</label><textarea id="edit-bio-text" class="form-control" rows="2"></textarea></div>
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Profile Picture (Avatar)</label><input type="file" id="edit-avatar-file" class="form-control" accept="image/*"></div>
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Cover Photo Banner</label><input type="file" id="edit-cover-file" class="form-control" accept="image/*"></div>
-            <button type="submit" class="btn-submit">Save Profile Changes</button>
+            <button type="submit" class="btn-submit" id="profile-save-btn">Save Profile Changes</button>
         </form>
     </div>
 </div>
@@ -2026,7 +2102,7 @@ INDEX_TEMPLATE = r"""
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Page Profile Photo (Avatar)</label><input type="file" id="page-avatar-file" class="form-control" accept="image/*"></div>
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Page Cover Banner</label><input type="file" id="page-cover-file" class="form-control" accept="image/*"></div>
             <div style="margin-bottom:8px;"><label style="font-size:0.8rem;font-weight:700;">Description</label><textarea id="page-desc" class="form-control" rows="2"></textarea></div>
-            <button type="submit" class="btn-submit">Save Page Details</button>
+            <button type="submit" class="btn-submit" id="page-save-btn">Save Page Details</button>
         </form>
     </div>
 </div>
@@ -2388,6 +2464,20 @@ async function sendChatMessage(e) {
     }
 }
 
+/* FAST PARALLEL FILE UPLOADER */
+async function uploadSelectedFile(fileInput) {
+    if(!fileInput || !fileInput.files || !fileInput.files[0]) return {url:'', is_video: false};
+    const formData = new FormData();
+    formData.append('file', fileInput.files[0]);
+    try {
+        const res = await fetch('/api/upload', {method:'POST', body: formData});
+        const data = await res.json();
+        return data.success ? {url: data.url, is_video: data.is_video} : {url:'', is_video: false};
+    } catch(e) {
+        return {url:'', is_video: false};
+    }
+}
+
 /* SELL / PRODUCT LISTING HANDLERS */
 function startSellItem(type = 'Market') {
     if(!currentUser) return window.location.href = '/auth';
@@ -2400,6 +2490,10 @@ function closeSellModal() { document.getElementById('sell-modal').style.display 
 
 async function handleProductSubmit(e) {
     e.preventDefault();
+    const btn = document.getElementById('sell-submit-btn');
+    btn.disabled = true;
+    btn.innerText = 'Publishing...';
+
     const type = document.getElementById('prod-type').value;
     const fileInput = document.getElementById('prod-img-file');
     let uploadedImg = '', uploadedVid = '';
@@ -2425,6 +2519,9 @@ async function handleProductSubmit(e) {
         })
     });
     const data = await res.json();
+    btn.disabled = false;
+    btn.innerText = 'Publish Item';
+
     showToast(data.message);
     if(data.success) {
         closeSellModal();
@@ -2461,6 +2558,10 @@ function closeEventModal() { document.getElementById('event-create-modal').style
 
 async function handleEventSubmit(e) {
     e.preventDefault();
+    const btn = document.getElementById('evt-submit-btn');
+    btn.disabled = true;
+    btn.innerText = 'Publishing...';
+
     const imgInput = document.getElementById('evt-image-file');
     let imgUrl = '';
     if(imgInput && imgInput.files[0]) imgUrl = (await uploadSelectedFile(imgInput)).url;
@@ -2478,6 +2579,9 @@ async function handleEventSubmit(e) {
         })
     });
     const data = await res.json();
+    btn.disabled = false;
+    btn.innerText = 'Publish Event';
+
     showToast(data.message);
     if(data.success) {
         closeEventModal();
@@ -2509,6 +2613,10 @@ function closeDatingModal() { document.getElementById('dating-modal').style.disp
 
 async function handleDatingProfileSubmit(e) {
     e.preventDefault();
+    const btn = document.getElementById('dt-submit-btn');
+    btn.disabled = true;
+    btn.innerText = 'Saving...';
+
     const res = await fetch('/api/dating/profile', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -2522,6 +2630,9 @@ async function handleDatingProfileSubmit(e) {
         })
     });
     const data = await res.json();
+    btn.disabled = false;
+    btn.innerText = 'Save Dating Profile';
+
     showToast(data.message);
     if(data.success) { closeDatingModal(); loadDatingMatches(); }
 }
@@ -2630,12 +2741,18 @@ function closeEditProfileModal() { document.getElementById('edit-profile-modal')
 
 async function handleProfileUpdateSubmit(e) {
     e.preventDefault();
+    const btn = document.getElementById('profile-save-btn');
+    btn.disabled = true;
+    btn.innerText = 'Saving... Please wait';
+
     const avatarInput = document.getElementById('edit-avatar-file');
     const coverInput = document.getElementById('edit-cover-file');
-    let avatarUrl = '', coverUrl = '';
 
-    if(avatarInput && avatarInput.files[0]) avatarUrl = (await uploadSelectedFile(avatarInput)).url;
-    if(coverInput && coverInput.files[0]) coverUrl = (await uploadSelectedFile(coverInput)).url;
+    // PARALLEL FAST FILE UPLOADS
+    const [avatarRes, coverRes] = await Promise.all([
+        uploadSelectedFile(avatarInput),
+        uploadSelectedFile(coverInput)
+    ]);
 
     const res = await fetch('/api/users/profile/update', {
         method:'POST',
@@ -2647,11 +2764,14 @@ async function handleProfileUpdateSubmit(e) {
             age: document.getElementById('edit-age').value,
             gender: document.getElementById('edit-gender').value,
             bio: document.getElementById('edit-bio-text').value,
-            avatar_url: avatarUrl,
-            cover_url: coverUrl
+            avatar_url: avatarRes.url,
+            cover_url: coverRes.url
         })
     });
     const data = await res.json();
+    btn.disabled = false;
+    btn.innerText = 'Save Profile Changes';
+
     showToast(data.message);
     if(data.success) {
         closeEditProfileModal();
@@ -2754,14 +2874,20 @@ function closePageModal() { document.getElementById('page-create-modal').style.d
 
 async function handlePageSubmit(e) {
     e.preventDefault();
+    const btn = document.getElementById('page-save-btn');
+    btn.disabled = true;
+    btn.innerText = 'Saving Page...';
+
     const name = document.getElementById('page-name').value.trim();
     const desc = document.getElementById('page-desc').value.trim();
     const avatarInput = document.getElementById('page-avatar-file');
     const coverInput = document.getElementById('page-cover-file');
-    let avatarUrl = '', coverUrl = '';
 
-    if(avatarInput && avatarInput.files[0]) avatarUrl = (await uploadSelectedFile(avatarInput)).url;
-    if(coverInput && coverInput.files[0]) coverUrl = (await uploadSelectedFile(coverInput)).url;
+    // PARALLEL FAST FILE UPLOADS
+    const [avatarRes, coverRes] = await Promise.all([
+        uploadSelectedFile(avatarInput),
+        uploadSelectedFile(coverInput)
+    ]);
 
     const editId = parseInt(document.getElementById('edit-page-id').value);
     const endpoint = editId > 0 ? `/api/pages/${editId}/update` : '/api/pages';
@@ -2769,9 +2895,12 @@ async function handlePageSubmit(e) {
     const res = await fetch(endpoint, {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({name, description: desc, avatar_url: avatarUrl, cover_url: coverUrl})
+        body: JSON.stringify({name, description: desc, avatar_url: avatarRes.url, cover_url: coverRes.url})
     });
     const data = await res.json();
+    btn.disabled = false;
+    btn.innerText = 'Save Page Details';
+
     showToast(data.message);
     if(data.success) {
         closePageModal();
@@ -2837,8 +2966,12 @@ function renderPostCard(p) {
 async function handlePostSubmit(e, postType) {
     if(e) e.preventDefault();
     if(!currentUser) return window.location.href = '/auth';
+    const btn = document.getElementById('feed-post-btn');
     const content = document.getElementById('post-content').value.trim();
     if(!content) return showToast('Please enter post text', 'error');
+
+    btn.disabled = true;
+    btn.innerText = 'Publishing...';
 
     let imageUrl = '', videoUrl = '';
     const fileInput = document.getElementById('post-file-input');
@@ -2854,6 +2987,9 @@ async function handlePostSubmit(e, postType) {
         body: JSON.stringify({content, image_url: imageUrl, video_url: videoUrl, post_type: postType, group_id: 0})
     });
     const data = await res.json();
+    btn.disabled = false;
+    btn.innerText = 'Publish Update';
+
     showToast(data.message);
     if(data.success) {
         document.getElementById('post-content').value = '';
@@ -2864,9 +3000,13 @@ async function handlePostSubmit(e, postType) {
 async function handlePagePostSubmit(e) {
     e.preventDefault();
     if(!currentUser) return window.location.href = '/auth';
+    const btn = document.getElementById('page-post-btn');
     const pageId = parseInt(document.getElementById('active-page-id').value);
     const content = document.getElementById('page-post-content').value.trim();
     if(!content) return showToast('Please enter post text', 'error');
+
+    btn.disabled = true;
+    btn.innerText = 'Publishing...';
 
     let imageUrl = '', videoUrl = '';
     const fileInput = document.getElementById('page-post-file-input');
@@ -2882,20 +3022,14 @@ async function handlePagePostSubmit(e) {
         body: JSON.stringify({content, image_url: imageUrl, video_url: videoUrl, post_type: 'Social', group_id: pageId})
     });
     const data = await res.json();
+    btn.disabled = false;
+    btn.innerText = 'Publish Page Post';
+
     showToast(data.message);
     if(data.success) {
         document.getElementById('page-post-content').value = '';
         loadPosts('Social', 'page-posts-container', pageId);
     }
-}
-
-async function uploadSelectedFile(fileInput) {
-    if(!fileInput || !fileInput.files[0]) return {url:'', is_video: false};
-    const formData = new FormData();
-    formData.append('file', fileInput.files[0]);
-    const res = await fetch('/api/upload', {method:'POST', body: formData});
-    const data = await res.json();
-    return data.success ? {url: data.url, is_video: data.is_video} : {url:'', is_video: false};
 }
 
 async function toggleLike(pid) {
@@ -3161,6 +3295,7 @@ ADMIN_TEMPLATE = r"""
 
 <div class="grid">
     <div class="card"><div class="val" id="st-users">0</div><div class="lbl">Total Members</div></div>
+    <div class="card"><div class="val" id="st-pages" style="color:#8b5cf6;">0</div><div class="lbl">Community Pages</div></div>
     <div class="card"><div class="val" id="st-income" style="color:#2563eb;">₦0.00</div><div class="lbl">Total Gross Revenue</div></div>
     <div class="card"><div class="val" id="st-net" style="color:#059669;">₦0.00</div><div class="lbl">Admin Net Profit</div></div>
     <div class="card"><div class="val" id="st-partners">0</div><div class="lbl">CPN Partners</div></div>
@@ -3169,6 +3304,7 @@ ADMIN_TEMPLATE = r"""
 
 <div class="admin-tabs">
     <button class="admin-tab active" onclick="switchAdminTab('posts')">Manage Posts</button>
+    <button class="admin-tab" onclick="switchAdminTab('pages')">Manage Pages</button>
     <button class="admin-tab" onclick="switchAdminTab('members')">Manage Members</button>
     <button class="admin-tab" onclick="switchAdminTab('partners')">CPN Claims</button>
     <button class="admin-tab" onclick="switchAdminTab('payouts')">Bank Cashouts</button>
@@ -3180,6 +3316,14 @@ ADMIN_TEMPLATE = r"""
         <input type="text" class="form-control" placeholder="🔍 Search post content, author name or username..." onkeyup="searchAdminPosts(this.value)">
     </div>
     <div id="posts-container"></div>
+</div>
+
+<!-- MANAGE PAGES TAB WITH LIVE SEARCH -->
+<div id="adm-pages" class="tab-sec">
+    <div class="search-box-wrap">
+        <input type="text" class="form-control" placeholder="🔍 Search page name or creator..." onkeyup="searchAdminPages(this.value)">
+    </div>
+    <div id="pages-admin-container"></div>
 </div>
 
 <!-- MANAGE MEMBERS TAB WITH LIVE SEARCH -->
@@ -3249,12 +3393,14 @@ async function loadAdminOverview() {
     const data = await res.json();
     if(!data.success) { alert('Admin access denied.'); window.location.href='/'; return; }
     document.getElementById('st-users').innerText = data.total_users;
+    document.getElementById('st-pages').innerText = data.total_pages || 0;
     document.getElementById('st-income').innerText = '₦' + data.total_gross_income.toLocaleString();
     document.getElementById('st-net').innerText = '₦' + data.admin_net_balance.toLocaleString();
     document.getElementById('st-partners').innerText = data.total_partners;
     document.getElementById('st-wallets').innerText = '₦' + data.total_partner_wallets.toLocaleString();
 
     searchAdminPosts('');
+    searchAdminPages('');
     searchAdminMembers('');
     searchAdminPartners('');
     searchAdminPayouts('');
@@ -3281,6 +3427,32 @@ async function searchAdminPosts(q) {
 async function deleteAdminPost(pid) {
     if(!confirm('Are you sure you want to delete this post?')) return;
     const res = await fetch(`/api/admin/posts?post_id=${pid}`, {method:'DELETE'});
+    const data = await res.json();
+    alert(data.message);
+    loadAdminOverview();
+}
+
+/* SEARCHABLE MANAGE PAGES */
+async function searchAdminPages(q) {
+    const res = await fetch(`/api/admin/pages?q=${encodeURIComponent(q)}`);
+    const pages = await res.json();
+    const box = document.getElementById('pages-admin-container');
+    if(!pages.length) { box.innerHTML = '<div class="card" style="text-align:center;">No pages found.</div>'; return; }
+    box.innerHTML = pages.map(g => `
+        <div class="item-card">
+            <div>
+                <div style="font-weight:800;font-size:0.95rem;color:#0b1e36;">${g.name}</div>
+                <div style="font-size:0.78rem;color:#64748b;">Created by: <b>${g.creator_name}</b> (@${g.creator_username}) | Followers: <b>${g.member_count}</b></div>
+                <div style="font-size:0.75rem;color:#64748b;margin-top:2px;">${g.description || 'No description'}</div>
+            </div>
+            <button class="btn-act btn-del" onclick="deleteAdminPage(${g.id})">Delete Page</button>
+        </div>
+    `).join('');
+}
+
+async function deleteAdminPage(gid) {
+    if(!confirm('Delete this page permanently? This will remove all page posts and members.')) return;
+    const res = await fetch(`/api/admin/pages?page_id=${gid}`, {method:'DELETE'});
     const data = await res.json();
     alert(data.message);
     loadAdminOverview();
@@ -3422,7 +3594,6 @@ def index():
     post_id = request.args.get('post')
     user_param = request.args.get('user')
 
-    # UNAUTHENTICATED DIRECT USERS GET REDIRECTED, BUT CRAWLERS OR DIRECT LINK PARAMS RENDER TEMPLATE WITH META TAGS
     if 'user_id' not in session and not post_id and not user_param:
         return redirect(url_for('auth_page'))
 
